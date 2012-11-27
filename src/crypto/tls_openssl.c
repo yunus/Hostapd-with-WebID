@@ -31,6 +31,33 @@
 #include "crypto.h"
 #include "tls.h"
 
+
+#ifdef EAP_SERVER_STLS
+#include "redland.h"
+
+
+
+#define SPARQL_WEBID \
+	"PREFIX cert: <http://www.w3.org/ns/auth/cert#> "\
+"PREFIX rsa: <http://www.w3.org/ns/auth/rsa#> "\
+"SELECT ?mod ?exp "\
+"WHERE { [] cert:key [ "\
+"cert:modulus ?mod; "\
+"cert:exponent ?exp; "\
+"] . " \
+"}" \
+	
+	/*
+    "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>" \
+    "PREFIX cert: <http://www.w3.org/ns/auth/cert#>" \
+    "SELECT ?m ?e ?mod ?exp WHERE {" \
+    "  ?key cert:identity <%s>; rsa:modulus ?m; rsa:public_exponent ?e." \
+    "  OPTIONAL { ?m cert:hex ?mod. }" \
+    "  OPTIONAL { ?e cert:decimal ?exp. }" \
+    "}"*/
+
+#endif /* EAP_SERVER_STLS */
+
 #if OPENSSL_VERSION_NUMBER >= 0x0090800fL
 #define OPENSSL_d2i_TYPE const unsigned char **
 #else
@@ -1175,6 +1202,139 @@ static void openssl_tls_cert_event(struct tls_connection *conn,
 	wpabuf_free(cert);
 }
 
+static int
+hex_or_x(int c) {
+    if (c >= '0' && c <= '9')
+        return c;
+    c |= 32;
+    if (c >= 'a' && c <= 'f')
+        return c;
+    return 'x';
+}
+
+static int
+matches_pkey(unsigned char *s, char *pkey) {
+    if (s == NULL || pkey == NULL)
+        return 0;
+    // eliminate leading zeros
+    while (s[0] == '0') s++;
+    while (pkey[0] == '0') pkey++;
+    unsigned int s_s = strlen((const char*)s);
+    unsigned int s_pkey = strlen(pkey);
+    unsigned int fc, pc, j, k = 0;
+
+    for (j = 0; j < s_s; j++) {
+        if ((fc = hex_or_x(s[j])) == 'x')
+            continue;
+        pc = hex_or_x(pkey[k]);
+        if (fc != pc)
+            break;
+        k++;
+    }
+    if (k == s_pkey)
+        return 1;
+    return 0;
+}
+
+static char* extract_uri_from_subjectAltName(X509 *cert) {
+	
+	GENERAL_NAME *gen;
+	void *ext;
+	int i;
+	
+	ext = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
+
+	for (i = 0; ext && i < sk_GENERAL_NAME_num(ext); i++) {
+		gen = sk_GENERAL_NAME_value(ext, i);
+		if (gen->type == GEN_URI)
+			return gen->d.uniformResourceIdentifier->data;
+	}
+	
+	return NULL;
+	
+	
+}
+
+static int
+validate_webid(const char *subjAltName, char *pkey_n, unsigned int pkey_e_i) {
+    int r = 0;
+
+    librdf_world *rdf_world = NULL;
+    librdf_storage *rdf_storage = NULL;
+    librdf_model *rdf_model = NULL;
+    librdf_query *rdf_query = NULL;
+    librdf_query_results *rdf_query_results = NULL;
+
+    rdf_world = librdf_new_world();
+    if (rdf_world != NULL) {
+        librdf_world_open(rdf_world);
+        rdf_storage = librdf_new_storage(rdf_world, "uri", subjAltName, NULL);
+        if (rdf_storage != NULL) {
+            rdf_model = librdf_new_model(rdf_world, rdf_storage, NULL);
+        } else
+            wpa_printf(MSG_WARNING,"STLS: librdf_new_storage returned NULL");
+           
+    }
+
+    if (rdf_model != NULL) {
+        //unsigned char *c_query = os_malloc(sizeof(SPARQL_WEBID) + sizeof(subjAltName) +1);
+        //char c_query[500];
+        //sprintf(c_query, SPARQL_WEBID, subjAltName);
+        //wpa_printf(MSG_DEBUG,"STLS: SPARQL query   = %s", c_query);
+                
+
+        rdf_query = librdf_new_query(rdf_world, "sparql", NULL, (const unsigned char*) SPARQL_WEBID /*c_query*/, NULL);
+        
+    } else {
+		wpa_printf(MSG_WARNING, "STLS: librdf_new_model returned NULL");        
+    }
+
+    if (rdf_query != NULL) {
+		wpa_printf(MSG_DEBUG,"STLS: just before executing the query");
+        rdf_query_results = librdf_query_execute(rdf_query, rdf_model);
+        if (rdf_query_results != NULL) {
+			//wpa_printf(MSG_DEBUG,"STLS: SPARQL query results: %s. \n finished? %d", \
+				librdf_query_results_to_string2(rdf_query_results,NULL,NULL,NULL,NULL), \
+				librdf_query_results_finished(rdf_query_results) );
+            for (; r != 1 && librdf_query_results_finished(rdf_query_results)==0; librdf_query_results_next(rdf_query_results)) {
+                librdf_node *m_node, *e_node;
+                unsigned char *rdf_mod;
+                unsigned char *rdf_exp;
+                
+                        m_node = librdf_query_results_get_binding_value_by_name(rdf_query_results, "mod");
+                    
+                        e_node = librdf_query_results_get_binding_value_by_name(rdf_query_results, "exp");
+                        
+                    
+                    if (librdf_node_is_literal(m_node) && librdf_node_is_literal(e_node)) {
+                        rdf_mod = librdf_node_get_literal_value(m_node);
+                        rdf_exp = librdf_node_get_literal_value(e_node);
+                        
+                        wpa_printf(MSG_DEBUG,"STLS: modulus = %s", rdf_mod);
+                        wpa_printf(MSG_DEBUG,"STLS: exponent = %s", rdf_exp);
+                        
+                        if (rdf_exp != NULL
+                            /* && apr_strtoi64((char*)rdf_exp, NULL, 10) == pkey_e_i */
+                            && matches_pkey(rdf_mod, pkey_n))
+                            r = 1;
+                        librdf_free_node(m_node);
+                        librdf_free_node(e_node);
+                    }
+                
+            }
+            librdf_free_query_results(rdf_query_results);
+        } else
+            wpa_printf(MSG_WARNING, "STLS: librdf_query_execute returned NULL");
+        librdf_free_query(rdf_query);
+    } else
+        wpa_printf(MSG_WARNING, "STLS: librdf_new_query returned NULL");
+
+    if (rdf_model) librdf_free_model(rdf_model);
+    if (rdf_storage) librdf_free_storage(rdf_storage);
+    if (rdf_world) librdf_free_world(rdf_world);
+
+    return r;
+}
 
 static int tls_verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)
 {
@@ -1185,6 +1345,13 @@ static int tls_verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)
 	struct tls_connection *conn;
 	char *match, *altmatch;
 	const char *err_str;
+#ifdef EAP_SERVER_STLS
+	EVP_PKEY *pkey = NULL;
+	RSA *rsa = NULL;
+	char *pubkey_hex = NULL;
+	char *subjectAltname = NULL;
+#endif /* EAP_SERVER_STLS */
+
 
 	err_cert = X509_STORE_CTX_get_current_cert(x509_ctx);
 	err = X509_STORE_CTX_get_error(x509_ctx);
@@ -1192,6 +1359,11 @@ static int tls_verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)
 	ssl = X509_STORE_CTX_get_ex_data(x509_ctx,
 					 SSL_get_ex_data_X509_STORE_CTX_idx());
 	X509_NAME_oneline(X509_get_subject_name(err_cert), buf, sizeof(buf));
+	
+
+            
+	
+	
 
 	conn = SSL_get_app_data(ssl);
 	if (conn == NULL)
@@ -1237,6 +1409,8 @@ static int tls_verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)
 		}
 	}
 #endif /* CONFIG_SHA256 */
+/*
+#ifdef EAP_SERVER_TLS
 
 	if (!preverify_ok) {
 		wpa_printf(MSG_WARNING, "TLS: Certificate verification failed,"
@@ -1246,6 +1420,8 @@ static int tls_verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)
 				       err_str, TLS_FAIL_UNSPECIFIED);
 		return preverify_ok;
 	}
+#endif /* EAP_SERVER_TLS*/	
+
 
 	wpa_printf(MSG_DEBUG, "TLS: tls_verify_cb - preverify_ok=%d "
 		   "err=%d (%s) ca_cert_verify=%d depth=%d buf='%s'",
@@ -1277,6 +1453,39 @@ static int tls_verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)
 				       "Server certificate chain probe",
 				       TLS_FAIL_SERVER_CHAIN_PROBE);
 	}
+	
+
+
+#ifdef EAP_SERVER_STLS
+
+
+	pkey = X509_get_pubkey(err_cert);
+	
+	rsa = EVP_PKEY_get1_RSA(pkey);
+	pubkey_hex = BN_bn2hex(rsa->n);
+	
+	
+    subjectAltname = extract_uri_from_subjectAltName(err_cert);   
+    wpa_printf(MSG_WARNING, "STLS: the pubkey is %s subjectAltname is %s",pubkey_hex,subjectAltname);  
+    
+    if(subjectAltname == NULL){
+		wpa_printf(MSG_WARNING,"STLS: Cetificate does not have URI in its subjectAltName field");
+		openssl_tls_fail_event(conn, err_cert, err, depth, buf,
+				       err_str, TLS_FAIL_UNSPECIFIED);
+		return preverify_ok;
+	}
+    preverify_ok = validate_webid(subjectAltname, pubkey_hex, 20);
+    wpa_printf(MSG_DEBUG,"STLS: validation result is %d",preverify_ok);
+    
+	if (rsa)
+           RSA_free(rsa);
+    if (pkey)
+           EVP_PKEY_free(pkey);
+    //if (subjectAltname)
+	//	os_free(subjectAltname);
+           
+           
+#endif /* EAP_SERVER_STLS */
 
 	if (preverify_ok && tls_global->event_cb != NULL)
 		tls_global->event_cb(tls_global->cb_ctx,

@@ -235,6 +235,16 @@ TLS_FUNCS=y
 endif
 endif
 
+ifdef CONFIG_EAP_STLS
+CFLAGS += -DEAP_SERVER_STLS
+LIBS += -lrdf
+ifndef CONFIG_EAP_TLS
+CFLAGS += -DEAP_SERVER_TLS
+OBJS += ../src/eap_server/eap_server_tls.o
+TLS_FUNCS=y
+endif
+endif
+
 ifdef CONFIG_EAP_PEAP
 CFLAGS += -DEAP_SERVER_PEAP
 OBJS += ../src/eap_server/eap_server_peap.o
