@@ -53,8 +53,19 @@ CONFIG_EAP=y
 # EAP-MD5 for the integrated EAP server
 CONFIG_EAP_MD5=y
 
-# EAP-TLS for the integrated EAP server
-CONFIG_EAP_TLS=y
+# EAP-STLS for the integrated EAP server with Social Network Authentication 
+# If EAP-STLS is chosen EAP-TLS preprocessor is also defined internally.
+# For the time being EAP-STLS works only for openssl 
+#CONFIG_EAP_TLS=y
+#CONFIG_EAP_UNAUTH_TLS=y
+CONFIG_EAP_STLS=y
+
+# Indicates that EAP_STLS employs webid authorization by using external python library. 
+# External library can be found under https://github.com/yunus/python-webid
+# For authorization of EAP_STLS Python.h is required. Add its directory to CFLAGS. 
+CONFIG_EAP_STLS_AUTHORIZATION=y
+CFLAGS += -I/usr/include/python2.7
+LIBS += -lpython2.7
 
 # EAP-MSCHAPv2 for the integrated EAP server
 CONFIG_EAP_MSCHAPV2=y

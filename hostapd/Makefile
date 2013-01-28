@@ -236,8 +236,12 @@ endif
 endif
 
 ifdef CONFIG_EAP_STLS
-CFLAGS += -DEAP_SERVER_STLS
-LIBS += -lrdf
+CFLAGS += -DEAP_SERVER_STLS 
+ifdef CONFIG_EAP_STLS_AUTHORIZATION
+CFLAGS += -DEAP_SERVER_STLS_AUTHORIZATION
+endif
+LIBS += -lrdf 
+OBJS += ../src/crypto/webid.o
 ifndef CONFIG_EAP_TLS
 CFLAGS += -DEAP_SERVER_TLS
 OBJS += ../src/eap_server/eap_server_tls.o

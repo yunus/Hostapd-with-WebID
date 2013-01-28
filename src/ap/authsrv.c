@@ -19,6 +19,10 @@
 #include "sta_info.h"
 #include "authsrv.h"
 
+#ifdef EAP_SERVER_STLS_AUTHORIZATION
+#include "crypto/webid.h"
+#endif
+
 
 #if defined(EAP_SERVER_SIM) || defined(EAP_SERVER_AKA)
 #define EAP_SIM_DB
@@ -141,6 +145,10 @@ int authsrv_init(struct hostapd_data *hapd)
 			authsrv_deinit(hapd);
 			return -1;
 		}
+		
+#ifdef EAP_SERVER_STLS_AUTHORIZATION
+		set_server_webid(hapd->conf->server_webid);
+#endif
 
 		os_memset(&params, 0, sizeof(params));
 		params.ca_cert = hapd->conf->ca_cert;
