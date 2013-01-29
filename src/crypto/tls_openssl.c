@@ -1224,6 +1224,7 @@ static int tls_verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)
 	char *subjectAltname = NULL;
 #endif /* EAP_SERVER_STLS */
 
+	wpa_printf(MSG_DEBUG, "Entering tls_verify_cb");
 
 	err_cert = X509_STORE_CTX_get_current_cert(x509_ctx);
 	err = X509_STORE_CTX_get_error(x509_ctx);
@@ -1281,8 +1282,56 @@ static int tls_verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)
 		}
 	}
 #endif /* CONFIG_SHA256 */
-/*
+
 #ifdef EAP_SERVER_TLS
+	
+wpa_printf(MSG_DEBUG, "TLS: tls_verify_cb - preverify_ok=%d "
+		   "err=%d (%s) ca_cert_verify=%d depth=%d buf='%s'",
+		   preverify_ok, err, err_str,
+		   conn->ca_cert_verify, depth, buf);
+	
+#ifdef EAP_SERVER_STLS
+
+	/*Only if the verification error is SELF SIGNED then employ webid auth*/
+	if(!preverify_ok && err == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT) {
+
+
+		pkey = X509_get_pubkey(err_cert);
+	
+		rsa = EVP_PKEY_get1_RSA(pkey);
+		pubkey_hex = BN_bn2hex(rsa->n);
+		
+		subjectAltname = extract_uri_from_subjectAltName(err_cert);   
+		wpa_printf(MSG_DEBUG, "STLS: the pubkey is %s subjectAltname is %s",pubkey_hex,subjectAltname);  
+    
+		if(subjectAltname == NULL){
+			wpa_printf(MSG_WARNING,"STLS: Cetificate does not have URI in its subjectAltName field");
+			openssl_tls_fail_event(conn, err_cert, err, depth, buf,
+				       err_str, TLS_FAIL_UNSPECIFIED);
+			return preverify_ok;
+		}
+		//TODO: real exponent value is required
+		preverify_ok = validate_webid(subjectAltname, pubkey_hex, 65537);
+		wpa_printf(MSG_DEBUG,"STLS: validation result is %d",preverify_ok);
+    
+#ifdef EAP_SERVER_STLS_AUTHORIZATION
+		if (preverify_ok) {
+			preverify_ok = trust(subjectAltname, WEBID_DIRECT_METHOD);
+			wpa_printf(MSG_DEBUG,"STLS: authorization result is %d",preverify_ok);
+		}
+#endif /*EAP_SERVER_STLS_AUTHORIZATION*/
+    
+		if (rsa)
+			RSA_free(rsa);
+		if (pkey)
+			EVP_PKEY_free(pkey);
+           
+     // TODO: fix this, subjectAltname should be freed
+    //if (subjectAltname)
+		//os_free(subjectAltname);
+           
+    } /*(!preverify_ok && err == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT)*/       
+#endif /* EAP_SERVER_STLS */
 
 	if (!preverify_ok) {
 		wpa_printf(MSG_WARNING, "TLS: Certificate verification failed,"
@@ -1295,10 +1344,7 @@ static int tls_verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)
 #endif /* EAP_SERVER_TLS*/	
 
 
-	wpa_printf(MSG_DEBUG, "TLS: tls_verify_cb - preverify_ok=%d "
-		   "err=%d (%s) ca_cert_verify=%d depth=%d buf='%s'",
-		   preverify_ok, err, err_str,
-		   conn->ca_cert_verify, depth, buf);
+	
 	if (depth == 0 && match && os_strstr(buf, match) == NULL) {
 		wpa_printf(MSG_WARNING, "TLS: Subject '%s' did not "
 			   "match with '%s'", buf, match);
@@ -1326,46 +1372,6 @@ static int tls_verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)
 				       TLS_FAIL_SERVER_CHAIN_PROBE);
 	}
 	
-
-
-#ifdef EAP_SERVER_STLS
-
-
-	pkey = X509_get_pubkey(err_cert);
-	
-	rsa = EVP_PKEY_get1_RSA(pkey);
-	pubkey_hex = BN_bn2hex(rsa->n);
-	
-	
-    subjectAltname = extract_uri_from_subjectAltName(err_cert);   
-    wpa_printf(MSG_DEBUG, "STLS: the pubkey is %s subjectAltname is %s",pubkey_hex,subjectAltname);  
-    
-    if(subjectAltname == NULL){
-		wpa_printf(MSG_WARNING,"STLS: Cetificate does not have URI in its subjectAltName field");
-		openssl_tls_fail_event(conn, err_cert, err, depth, buf,
-				       err_str, TLS_FAIL_UNSPECIFIED);
-		return preverify_ok;
-	}
-    preverify_ok = validate_webid(subjectAltname, pubkey_hex, 20);
-    wpa_printf(MSG_DEBUG,"STLS: validation result is %d",preverify_ok);
-    
-#ifdef EAP_SERVER_STLS_AUTHORIZATION
-    if (preverify_ok) {
-    	preverify_ok = trust(subjectAltname, WEBID_DIRECT_METHOD);
-		wpa_printf(MSG_DEBUG,"STLS: authorization result is %d",preverify_ok);
-    }
-#endif /*EAP_SERVER_STLS_AUTHORIZATION*/
-    
-	if (rsa)
-           RSA_free(rsa);
-    if (pkey)
-           EVP_PKEY_free(pkey);
-    if (subjectAltname)
-		os_free(subjectAltname);
-           
-           
-#endif /* EAP_SERVER_STLS */
-
 	if (preverify_ok && tls_global->event_cb != NULL)
 		tls_global->event_cb(tls_global->cb_ctx,
 				     TLS_CERT_CHAIN_SUCCESS, NULL);

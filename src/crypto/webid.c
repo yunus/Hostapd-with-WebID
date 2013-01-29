@@ -121,12 +121,7 @@ validate_webid(const char *subjAltName, char *pkey_n, unsigned int pkey_e_i) {
     }
 
     if (rdf_model != NULL) {
-        /*unsigned char *c_query = os_malloc(sizeof(SPARQL_WEBID) + sizeof(subjAltName) +1);
-        char c_query[500];
-        sprintf(c_query, SPARQL_WEBID, subjAltName);
-        wpa_printf(MSG_DEBUG,"STLS: SPARQL query   = %s", c_query);
-		*/
-
+       
         rdf_query = librdf_new_query(rdf_world, "sparql", NULL, (const unsigned char*) SPARQL_WEBID /*c_query*/, NULL);
 
     } else {
@@ -158,7 +153,7 @@ validate_webid(const char *subjAltName, char *pkey_n, unsigned int pkey_e_i) {
                         wpa_printf(MSG_DEBUG,"STLS: exponent = %s", rdf_exp);
 
                         if (rdf_exp != NULL
-                            /* && apr_strtoi64((char*)rdf_exp, NULL, 10) == pkey_e_i */
+                            && strtol((char*)rdf_exp, NULL, 10) == (long)pkey_e_i 
                             && matches_pkey(rdf_mod, pkey_n))
                             r = 1;
                         librdf_free_node(m_node);

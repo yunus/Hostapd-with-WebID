@@ -9,14 +9,6 @@
 "] . " \
 "}" \
 	
-	/*
-    "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>" \
-    "PREFIX cert: <http://www.w3.org/ns/auth/cert#>" \
-    "SELECT ?m ?e ?mod ?exp WHERE {" \
-    "  ?key cert:identity <%s>; rsa:modulus ?m; rsa:public_exponent ?e." \
-    "  OPTIONAL { ?m cert:hex ?mod. }" \
-    "  OPTIONAL { ?e cert:decimal ?exp. }" \
-    "}"*/
 
 
 #define WEBID_MODULE "webid.authorizer"
