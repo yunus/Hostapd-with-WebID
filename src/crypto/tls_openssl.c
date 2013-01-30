@@ -1221,10 +1221,10 @@ static int tls_verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)
 	EVP_PKEY *pkey = NULL;
 	RSA *rsa = NULL;
 	char *pubkey_hex = NULL;
+	char *pkey_exponent = NULL;
 	char *subjectAltname = NULL;
 #endif /* EAP_SERVER_STLS */
 
-	wpa_printf(MSG_DEBUG, "Entering tls_verify_cb");
 
 	err_cert = X509_STORE_CTX_get_current_cert(x509_ctx);
 	err = X509_STORE_CTX_get_error(x509_ctx);
@@ -1293,16 +1293,9 @@ wpa_printf(MSG_DEBUG, "TLS: tls_verify_cb - preverify_ok=%d "
 #ifdef EAP_SERVER_STLS
 
 	/*Only if the verification error is SELF SIGNED then employ webid auth*/
-	if(!preverify_ok && err == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT) {
-
-
-		pkey = X509_get_pubkey(err_cert);
-	
-		rsa = EVP_PKEY_get1_RSA(pkey);
-		pubkey_hex = BN_bn2hex(rsa->n);
+	if(!preverify_ok && err == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT) {		
 		
-		subjectAltname = extract_uri_from_subjectAltName(err_cert);   
-		wpa_printf(MSG_DEBUG, "STLS: the pubkey is %s subjectAltname is %s",pubkey_hex,subjectAltname);  
+		subjectAltname = extract_uri_from_subjectAltName(err_cert);   	
     
 		if(subjectAltname == NULL){
 			wpa_printf(MSG_WARNING,"STLS: Cetificate does not have URI in its subjectAltName field");
@@ -1310,8 +1303,14 @@ wpa_printf(MSG_DEBUG, "TLS: tls_verify_cb - preverify_ok=%d "
 				       err_str, TLS_FAIL_UNSPECIFIED);
 			return preverify_ok;
 		}
-		//TODO: real exponent value is required
-		preverify_ok = validate_webid(subjectAltname, pubkey_hex, 65537);
+		
+		pkey = X509_get_pubkey(err_cert);	
+		rsa = EVP_PKEY_get1_RSA(pkey);
+		pubkey_hex = BN_bn2hex(rsa->n);
+		pkey_exponent = BN_bn2dec(rsa->e);
+		wpa_printf(MSG_DEBUG, "STLS: the pubkey is %s subjectAltname is %s exponent %s",pubkey_hex,subjectAltname, pkey_exponent);  
+		
+		preverify_ok = validate_webid(subjectAltname, pubkey_hex, strtol((const char*)pkey_exponent,NULL, 10));
 		wpa_printf(MSG_DEBUG,"STLS: validation result is %d",preverify_ok);
     
 #ifdef EAP_SERVER_STLS_AUTHORIZATION
@@ -1325,10 +1324,11 @@ wpa_printf(MSG_DEBUG, "TLS: tls_verify_cb - preverify_ok=%d "
 			RSA_free(rsa);
 		if (pkey)
 			EVP_PKEY_free(pkey);
+		if (pubkey_hex)
+			OPENSSL_free(pubkey_hex);
+		if (pkey_exponent)
+			OPENSSL_free(pkey_exponent);
            
-     // TODO: fix this, subjectAltname should be freed
-    //if (subjectAltname)
-		//os_free(subjectAltname);
            
     } /*(!preverify_ok && err == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT)*/       
 #endif /* EAP_SERVER_STLS */
