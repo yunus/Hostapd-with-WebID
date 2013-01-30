@@ -15,6 +15,7 @@
 #ifdef EAP_SERVER_STLS_AUTHORIZATION
 	#include <Python.h>
 	static const char *serv_webid;
+	static char *webid_method;
 #endif
 
 
@@ -56,7 +57,7 @@ matches_pkey(unsigned char *s, char *pkey) {
 
 #ifdef EAP_SERVER_STLS_AUTHORIZATION
 int
-trust( const char* san_uri, char* method)
+trust( const char* san_uri)
 {
     PyObject  *pModule;
     PyObject *pValue;
@@ -67,12 +68,12 @@ trust( const char* san_uri, char* method)
 
     if (pModule != NULL) {
 
-        	pValue = PyObject_CallMethod(pModule,method,"ss", serv_webid, san_uri);
+        	pValue = PyObject_CallMethod(pModule,webid_method,"ss", serv_webid, san_uri);
         	/* pValue is a new reference*/
 
             if (pValue != NULL &&  PyBool_Check(pValue)) {
             	is_trusted = PyObject_IsTrue(pValue);
-            	wpa_printf(MSG_DEBUG,"STLS: Result from %s is %d",method,is_trusted);            
+            	wpa_printf(MSG_DEBUG,"STLS: Result from %s is %d",webid_method,is_trusted);            
                 Py_DECREF(pValue);
             }
             else {                
@@ -93,8 +94,13 @@ trust( const char* san_uri, char* method)
     return is_trusted;
 }
 
-void set_server_webid(const char* webid){
+void set_server_webid(const char* webid, const char* webid_m){
 	serv_webid = webid;
+	if(os_strcmp(webid_m,"direct") == 0)
+		webid_method = WEBID_DIRECT_METHOD;
+	else
+		webid_method = WEBID_TRANSITIVE_METHOD;
+	
 }
 
 #endif /*EAP_SERVER_STLS_AUTHORIZATION*/
@@ -132,9 +138,7 @@ validate_webid(const char *subjAltName, char *pkey_n, unsigned int pkey_e_i) {
 		wpa_printf(MSG_DEBUG,"STLS: just before executing the query");
         rdf_query_results = librdf_query_execute(rdf_query, rdf_model);
         if (rdf_query_results != NULL) {
-			//wpa_printf(MSG_DEBUG,"STLS: SPARQL query results: %s. \n finished? %d", \
-				librdf_query_results_to_string2(rdf_query_results,NULL,NULL,NULL,NULL), \
-				librdf_query_results_finished(rdf_query_results) );
+			
             for (; r != 1 && librdf_query_results_finished(rdf_query_results)==0; librdf_query_results_next(rdf_query_results)) {
                 librdf_node *m_node, *e_node;
                 unsigned char *rdf_mod;
@@ -149,8 +153,8 @@ validate_webid(const char *subjAltName, char *pkey_n, unsigned int pkey_e_i) {
                         rdf_mod = librdf_node_get_literal_value(m_node);
                         rdf_exp = librdf_node_get_literal_value(e_node);
 
-                        wpa_printf(MSG_DEBUG,"STLS: modulus = %s", rdf_mod);
-                        wpa_printf(MSG_DEBUG,"STLS: exponent = %s", rdf_exp);
+                        wpa_printf(MSG_DEBUG,"STLS: modulus = %s, exponent: %s", rdf_mod, rdf_exp);
+                        
 
                         if (rdf_exp != NULL
                             && strtol((char*)rdf_exp, NULL, 10) == (long)pkey_e_i 

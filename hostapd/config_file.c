@@ -1853,7 +1853,10 @@ static int hostapd_config_fill(struct hostapd_config *conf,
 		} else if (os_strcmp(buf, "server_webid") == 0) {
 			os_free(bss->server_webid);
 			bss->server_webid = os_strdup(pos);
-		}else if (os_strcmp(buf, "check_crl") == 0) {
+		} else if (os_strcmp(buf, "webid_auth_method") == 0) {
+			os_free(bss->webid_method);
+			bss->webid_method = os_strdup(pos);
+		} else if (os_strcmp(buf, "check_crl") == 0) {
 			bss->check_crl = atoi(pos);
 		} else if (os_strcmp(buf, "dh_file") == 0) {
 			os_free(bss->dh_file);

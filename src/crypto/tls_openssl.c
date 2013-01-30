@@ -1308,14 +1308,14 @@ wpa_printf(MSG_DEBUG, "TLS: tls_verify_cb - preverify_ok=%d "
 		rsa = EVP_PKEY_get1_RSA(pkey);
 		pubkey_hex = BN_bn2hex(rsa->n);
 		pkey_exponent = BN_bn2dec(rsa->e);
-		wpa_printf(MSG_DEBUG, "STLS: the pubkey is %s subjectAltname is %s exponent %s",pubkey_hex,subjectAltname, pkey_exponent);  
+		wpa_printf(MSG_DEBUG, "STLS: the pubkey is %s subjectAltname is %s exponent: %s",pubkey_hex,subjectAltname, pkey_exponent);  
 		
 		preverify_ok = validate_webid(subjectAltname, pubkey_hex, strtol((const char*)pkey_exponent,NULL, 10));
 		wpa_printf(MSG_DEBUG,"STLS: validation result is %d",preverify_ok);
     
 #ifdef EAP_SERVER_STLS_AUTHORIZATION
 		if (preverify_ok) {
-			preverify_ok = trust(subjectAltname, WEBID_DIRECT_METHOD);
+			preverify_ok = trust(subjectAltname);
 			wpa_printf(MSG_DEBUG,"STLS: authorization result is %d",preverify_ok);
 		}
 #endif /*EAP_SERVER_STLS_AUTHORIZATION*/

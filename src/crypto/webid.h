@@ -20,23 +20,26 @@
  * trust - webid authorization checker
  * 
  * @san_uri: The uri of the connecting peer. In the certificate under Subject Alternative Name (SAN) field
- * @method: defines whether direct trust or transitive trust will be used. USE the above WEBID_*_METHOD definitions
+ *
  * return: integer 0 => not authorized, 1=> authorized
  * 
  * 
  * Checks whether the peers trust (authorize) each other.
  * Also this method requires  git://github.com/yunus/python-webid.git to be installed Since it calls python library.
 */
-int trust( const char* san_uri, char* method);
+int trust( const char* san_uri);
 
 /*
  * set_server_webid - sets the server device's webid url
  * @webid: the server's webid
+ * @webid_m: defines whether direct trust ot transitive trust will be used, if ="direct",
+ * 	direct method is used otherwise transitive
  * 
  * the server_webid entered in the config file is set as a global variable
+ * the webid_auth_method entered in the config file is set as a global variable
  * 
  * */
-void set_server_webid(const char* webid);
+void set_server_webid(const char* webid, const char* webid_m);
 
 #endif /*EAP_SERVER_STLS_AUTHORIZATION*/
 

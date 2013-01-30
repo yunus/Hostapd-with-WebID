@@ -287,6 +287,7 @@ struct hostapd_bss_config {
 	char *private_key;
 	char *private_key_passwd;
 	char *server_webid;
+	char *webid_method;
 	int check_crl;
 	char *dh_file;
 	u8 *pac_opaque_encr_key;
