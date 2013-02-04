@@ -180,6 +180,9 @@ struct wps_registrar {
 	u8 authorized_macs_union[WPS_MAX_AUTHORIZED_MACS][ETH_ALEN];
 
 	u8 p2p_dev_addr[ETH_ALEN];
+
+	u8 pbc_ignore_uuid[WPS_UUID_LEN];
+	struct os_time pbc_ignore_start;
 };
 
 
@@ -1030,6 +1033,8 @@ void wps_registrar_complete(struct wps_registrar *registrar, const u8 *uuid_e,
 		wps_registrar_remove_pbc_session(registrar,
 						 uuid_e, NULL);
 		wps_registrar_pbc_completed(registrar);
+		os_get_time(&registrar->pbc_ignore_start);
+		os_memcpy(registrar->pbc_ignore_uuid, uuid_e, WPS_UUID_LEN);
 	} else {
 		wps_registrar_pin_completed(registrar);
 	}
@@ -1076,6 +1081,7 @@ void wps_registrar_probe_req_rx(struct wps_registrar *reg, const u8 *addr,
 				int p2p_wildcard)
 {
 	struct wps_parse_attr attr;
+	int skip_add = 0;
 
 	wpa_hexdump_buf(MSG_MSGDUMP,
 			"WPS: Probe Request with WPS data received",
@@ -1127,7 +1133,24 @@ void wps_registrar_probe_req_rx(struct wps_registrar *reg, const u8 *addr,
 	wpa_hexdump(MSG_DEBUG, "WPS: UUID-E from Probe Request", attr.uuid_e,
 		    WPS_UUID_LEN);
 
-	wps_registrar_add_pbc_session(reg, addr, attr.uuid_e);
+#ifdef WPS_WORKAROUNDS
+	if (reg->pbc_ignore_start.sec &&
+	    os_memcmp(attr.uuid_e, reg->pbc_ignore_uuid, WPS_UUID_LEN) == 0) {
+		struct os_time now, dur;
+		os_get_time(&now);
+		os_time_sub(&now, &reg->pbc_ignore_start, &dur);
+		if (dur.sec >= 0 && dur.sec < 5) {
+			wpa_printf(MSG_DEBUG, "WPS: Ignore PBC activation "
+				   "based on Probe Request from the Enrollee "
+				   "that just completed PBC provisioning");
+			skip_add = 1;
+		} else
+			reg->pbc_ignore_start.sec = 0;
+	}
+#endif /* WPS_WORKAROUNDS */
+
+	if (!skip_add)
+		wps_registrar_add_pbc_session(reg, addr, attr.uuid_e);
 	if (wps_registrar_pbc_overlap(reg, addr, attr.uuid_e)) {
 		wpa_printf(MSG_DEBUG, "WPS: PBC session overlap detected");
 		reg->force_pbc_overlap = 1;
@@ -1270,7 +1293,7 @@ static int wps_set_ie(struct wps_registrar *reg)
 	    wps_build_uuid_e(probe, reg->wps->uuid) ||
 	    wps_build_device_attrs(&reg->wps->dev, probe) ||
 	    wps_build_probe_config_methods(reg, probe) ||
-	    wps_build_rf_bands(&reg->wps->dev, probe) ||
+	    (reg->dualband && wps_build_rf_bands(&reg->wps->dev, probe)) ||
 	    wps_build_wfa_ext(probe, 0, auth_macs, count) ||
 	    wps_build_vendor_ext(&reg->wps->dev, probe)) {
 		wpabuf_free(beacon);
@@ -2233,22 +2256,6 @@ static int wps_process_pubkey(struct wps_data *wps, const u8 *pk,
 		return -1;
 	}
 
-#ifdef CONFIG_WPS_OOB
-	if (wps->wps->oob_conf.pubkey_hash != NULL) {
-		const u8 *addr[1];
-		u8 hash[WPS_HASH_LEN];
-
-		addr[0] = pk;
-		sha256_vector(1, addr, &pk_len, hash);
-		if (os_memcmp(hash,
-			      wpabuf_head(wps->wps->oob_conf.pubkey_hash),
-			      WPS_OOB_PUBKEY_HASH_LEN) != 0) {
-			wpa_printf(MSG_ERROR, "WPS: Public Key hash error");
-			return -1;
-		}
-	}
-#endif /* CONFIG_WPS_OOB */
-
 	wpabuf_free(wps->dh_pubkey_e);
 	wps->dh_pubkey_e = wpabuf_alloc_copy(pk, pk_len);
 	if (wps->dh_pubkey_e == NULL)
@@ -2543,16 +2550,6 @@ static enum wps_process_res wps_process_m1(struct wps_data *wps,
 		}
 	}
 #endif /* CONFIG_WPS_NFC */
-
-#ifdef CONFIG_WPS_OOB
-	if (wps->dev_pw_id >= 0x10 && wps->nfc_pw_token == NULL &&
-	    wps->dev_pw_id != wps->wps->oob_dev_pw_id) {
-		wpa_printf(MSG_DEBUG, "WPS: OOB Device Password ID "
-			   "%d mismatch", wps->dev_pw_id);
-		wps->state = SEND_M2D;
-		return WPS_CONTINUE;
-	}
-#endif /* CONFIG_WPS_OOB */
 
 	if (wps->dev_pw_id == DEV_PW_PUSHBUTTON) {
 		if ((wps->wps->registrar->force_pbc_overlap ||
@@ -3183,6 +3180,9 @@ static enum wps_process_res wps_process_wsc_done(struct wps_data *wps,
 						 wps->uuid_e,
 						 wps->p2p_dev_addr);
 		wps_registrar_pbc_completed(wps->wps->registrar);
+		os_get_time(&wps->wps->registrar->pbc_ignore_start);
+		os_memcpy(wps->wps->registrar->pbc_ignore_uuid, wps->uuid_e,
+			  WPS_UUID_LEN);
 	} else {
 		wps_registrar_pin_completed(wps->wps->registrar);
 	}

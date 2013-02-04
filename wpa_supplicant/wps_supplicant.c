@@ -256,6 +256,15 @@ static int wpa_supplicant_wps_cred(void *ctx,
 		return 0;
 	}
 
+	if (auth_type == WPS_AUTH_WPAPSK || auth_type == WPS_AUTH_WPA2PSK) {
+		if (cred->key_len < 8 || cred->key_len > 2 * PMK_LEN) {
+			wpa_printf(MSG_ERROR, "WPS: Reject PSK credential with "
+				   "invalid Network Key length %lu",
+				   (unsigned long) cred->key_len);
+			return -1;
+		}
+	}
+
 	if (ssid && (ssid->key_mgmt & WPA_KEY_MGMT_WPS)) {
 		wpa_printf(MSG_DEBUG, "WPS: Replace WPS network block based "
 			   "on the received credential");
@@ -414,6 +423,13 @@ static int wpa_supplicant_wps_cred(void *ctx,
 	}
 #endif /* CONFIG_NO_CONFIG_WRITE */
 
+	/*
+	 * Optimize the post-WPS scan based on the channel used during
+	 * the provisioning in case EAP-Failure is not received.
+	 */
+	wpa_s->after_wps = 5;
+	wpa_s->wps_freq = wpa_s->assoc_freq;
+
 	return 0;
 }
 
@@ -495,6 +511,7 @@ static void wpas_wps_reenable_networks_cb(void *eloop_ctx, void *timeout_ctx);
 static void wpas_wps_reenable_networks(struct wpa_supplicant *wpa_s)
 {
 	struct wpa_ssid *ssid;
+	int changed = 0;
 
 	eloop_cancel_timeout(wpas_wps_reenable_networks_cb, wpa_s, NULL);
 
@@ -503,7 +520,18 @@ static void wpas_wps_reenable_networks(struct wpa_supplicant *wpa_s)
 			ssid->disabled_for_connect = 0;
 			ssid->disabled = 0;
 			wpas_notify_network_enabled_changed(wpa_s, ssid);
+			changed++;
 		}
+	}
+
+	if (changed) {
+#ifndef CONFIG_NO_CONFIG_WRITE
+		if (wpa_s->conf->update_config &&
+		    wpa_config_write(wpa_s->confname, wpa_s->conf)) {
+			wpa_printf(MSG_DEBUG, "WPS: Failed to update "
+				   "configuration");
+		}
+#endif /* CONFIG_NO_CONFIG_WRITE */
 	}
 }
 
@@ -910,7 +938,8 @@ int wpas_wps_start_pbc(struct wpa_supplicant *wpa_s, const u8 *bssid,
 		}
 	}
 #endif /* CONFIG_P2P */
-	wpa_config_set(ssid, "phase1", "\"pbc=1\"", 0);
+	if (wpa_config_set(ssid, "phase1", "\"pbc=1\"", 0) < 0)
+		return -1;
 	if (wpa_s->wps_fragment_size)
 		ssid->eap.fragment_size = wpa_s->wps_fragment_size;
 	eloop_register_timeout(WPS_PBC_WALK_TIME, 0, wpas_wps_timeout,
@@ -953,7 +982,8 @@ int wpas_wps_start_pin(struct wpa_supplicant *wpa_s, const u8 *bssid,
 		os_snprintf(val, sizeof(val), "\"pin=%08d dev_pw_id=%u\"",
 			    rpin, dev_pw_id);
 	}
-	wpa_config_set(ssid, "phase1", val, 0);
+	if (wpa_config_set(ssid, "phase1", val, 0) < 0)
+		return -1;
 	if (wpa_s->wps_fragment_size)
 		ssid->eap.fragment_size = wpa_s->wps_fragment_size;
 	eloop_register_timeout(WPS_PBC_WALK_TIME, 0, wpas_wps_timeout,
@@ -994,56 +1024,6 @@ int wpas_wps_cancel(struct wpa_supplicant *wpa_s)
 }
 
 
-#ifdef CONFIG_WPS_OOB
-int wpas_wps_start_oob(struct wpa_supplicant *wpa_s, char *device_type,
-		       char *path, char *method)
-{
-	struct wps_context *wps = wpa_s->wps;
-	struct oob_device_data *oob_dev;
-
-	oob_dev = wps_get_oob_device(device_type);
-	if (oob_dev == NULL)
-		return -1;
-	oob_dev->device_path = path;
-	wps->oob_conf.oob_method = wps_get_oob_method(method);
-
-	if (wps->oob_conf.oob_method == OOB_METHOD_DEV_PWD_E) {
-		/*
-		 * Use pre-configured DH keys in order to be able to write the
-		 * key hash into the OOB file.
-		 */
-		wpabuf_free(wps->dh_pubkey);
-		wpabuf_free(wps->dh_privkey);
-		wps->dh_privkey = NULL;
-		wps->dh_pubkey = NULL;
-		dh5_free(wps->dh_ctx);
-		wps->dh_ctx = dh5_init(&wps->dh_privkey, &wps->dh_pubkey);
-		wps->dh_pubkey = wpabuf_zeropad(wps->dh_pubkey, 192);
-		if (wps->dh_ctx == NULL || wps->dh_pubkey == NULL) {
-			wpa_printf(MSG_ERROR, "WPS: Failed to initialize "
-				   "Diffie-Hellman handshake");
-			return -1;
-		}
-	}
-
-	if (wps->oob_conf.oob_method == OOB_METHOD_CRED)
-		wpas_clear_wps(wpa_s);
-
-	if (wps_process_oob(wps, oob_dev, 0) < 0)
-		return -1;
-
-	if ((wps->oob_conf.oob_method == OOB_METHOD_DEV_PWD_E ||
-	     wps->oob_conf.oob_method == OOB_METHOD_DEV_PWD_R) &&
-	    wpas_wps_start_pin(wpa_s, NULL,
-			       wpabuf_head(wps->oob_conf.dev_password), 0,
-			       DEV_PW_DEFAULT) < 0)
-			return -1;
-
-	return 0;
-}
-#endif /* CONFIG_WPS_OOB */
-
-
 int wpas_wps_start_reg(struct wpa_supplicant *wpa_s, const u8 *bssid,
 		       const char *pin, struct wps_new_ap_settings *settings)
 {
@@ -1077,7 +1057,8 @@ int wpas_wps_start_reg(struct wpa_supplicant *wpa_s, const u8 *bssid,
 	res = os_snprintf(pos, end - pos, "\"");
 	if (res < 0 || res >= end - pos)
 		return -1;
-	wpa_config_set(ssid, "phase1", val, 0);
+	if (wpa_config_set(ssid, "phase1", val, 0) < 0)
+		return -1;
 	if (wpa_s->wps_fragment_size)
 		ssid->eap.fragment_size = wpa_s->wps_fragment_size;
 	eloop_register_timeout(WPS_PBC_WALK_TIME, 0, wpas_wps_timeout,
@@ -1307,8 +1288,6 @@ void wpas_wps_deinit(struct wpa_supplicant *wpa_s)
 	wps_registrar_deinit(wpa_s->wps->registrar);
 	wpabuf_free(wpa_s->wps->dh_pubkey);
 	wpabuf_free(wpa_s->wps->dh_privkey);
-	wpabuf_free(wpa_s->wps->oob_conf.pubkey_hash);
-	wpabuf_free(wpa_s->wps->oob_conf.dev_password);
 	wpabuf_free(wpa_s->wps->dev.vendor_ext_m1);
 	os_free(wpa_s->wps->network_key);
 	os_free(wpa_s->wps);

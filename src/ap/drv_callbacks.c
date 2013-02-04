@@ -109,6 +109,15 @@ int hostapd_notif_assoc(struct hostapd_data *hapd, const u8 *addr,
 	}
 #endif /* CONFIG_P2P */
 
+#ifdef CONFIG_HS20
+	wpabuf_free(sta->hs20_ie);
+	if (elems.hs20 && elems.hs20_len > 4) {
+		sta->hs20_ie = wpabuf_alloc_copy(elems.hs20 + 4,
+						 elems.hs20_len - 4);
+	} else
+		sta->hs20_ie = NULL;
+#endif /* CONFIG_HS20 */
+
 	if (hapd->conf->wpa) {
 		if (ie == NULL || ielen == 0) {
 #ifdef CONFIG_WPS
@@ -503,13 +512,13 @@ static void hostapd_action_rx(struct hostapd_data *hapd,
 					   action->data + 2);
 	}
 #endif /* CONFIG_IEEE80211W */
-#ifdef CONFIG_IEEE80211V
+#ifdef CONFIG_WNM
 	if (action->category == WLAN_ACTION_WNM) {
 		wpa_printf(MSG_DEBUG, "%s: WNM_ACTION length %d",
 			   __func__, (int) action->len);
 		ieee802_11_rx_wnm_action_ap(hapd, action);
 	}
-#endif /* CONFIG_IEEE80211V */
+#endif /* CONFIG_WNM */
 }
 
 

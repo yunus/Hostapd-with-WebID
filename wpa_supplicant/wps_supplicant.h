@@ -9,7 +9,6 @@
 #ifndef WPS_SUPPLICANT_H
 #define WPS_SUPPLICANT_H
 
-struct wpa_scan_res;
 struct wpa_scan_results;
 
 #ifdef CONFIG_WPS
@@ -35,8 +34,6 @@ int wpas_wps_start_pbc(struct wpa_supplicant *wpa_s, const u8 *bssid,
 int wpas_wps_start_pin(struct wpa_supplicant *wpa_s, const u8 *bssid,
 		       const char *pin, int p2p_group, u16 dev_pw_id);
 int wpas_wps_cancel(struct wpa_supplicant *wpa_s);
-int wpas_wps_start_oob(struct wpa_supplicant *wpa_s, char *device_type,
-		       char *path, char *method);
 int wpas_wps_start_reg(struct wpa_supplicant *wpa_s, const u8 *bssid,
 		       const char *pin, struct wps_new_ap_settings *settings);
 int wpas_wps_ssid_bss_match(struct wpa_supplicant *wpa_s,
@@ -109,7 +106,7 @@ static inline int wpas_wps_ssid_bss_match(struct wpa_supplicant *wpa_s,
 
 static inline int wpas_wps_ssid_wildcard_ok(struct wpa_supplicant *wpa_s,
 					    struct wpa_ssid *ssid,
-					    struct wpa_scan_res *bss)
+					    struct wpa_bss *bss)
 {
 	return 0;
 }

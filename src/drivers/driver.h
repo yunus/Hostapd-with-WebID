@@ -840,6 +840,8 @@ struct wpa_driver_capa {
 #define WPA_DRIVER_FLAGS_AP_MLME			0x01000000
 /* Driver supports SAE with user space SME */
 #define WPA_DRIVER_FLAGS_SAE				0x02000000
+/* Driver makes use of OBSS scan mechanism in wpa_supplicant */
+#define WPA_DRIVER_FLAGS_OBSS_SCAN			0x04000000
 	unsigned int flags;
 
 	int max_scan_ssids;
@@ -896,6 +898,7 @@ struct hostapd_sta_add_params {
 	size_t supp_rates_len;
 	u16 listen_interval;
 	const struct ieee80211_ht_capabilities *ht_capabilities;
+	const struct ieee80211_vht_capabilities *vht_capabilities;
 	u32 flags; /* bitmask of WPA_STA_* flags */
 	int set; /* Set STA parameters instead of add */
 	u8 qosinfo;
@@ -905,10 +908,19 @@ struct hostapd_freq_params {
 	int mode;
 	int freq;
 	int channel;
+	/* for HT */
 	int ht_enabled;
 	int sec_channel_offset; /* 0 = HT40 disabled, -1 = HT40 enabled,
 				 * secondary channel below primary, 1 = HT40
 				 * enabled, secondary channel above primary */
+
+	/* for VHT */
+	int vht_enabled;
+
+	/* valid for both HT and VHT, center_freq2 is non-zero
+	 * only for bandwidth 80 and an 80+80 channel */
+	int center_freq1, center_freq2;
+	int bandwidth;
 };
 
 enum wpa_driver_if_type {
@@ -1199,17 +1211,6 @@ struct wpa_driver_ops {
 	 * Returns: 0 on success, -1 on failure
 	 */
 	int (*deauthenticate)(void *priv, const u8 *addr, int reason_code);
-
-	/**
-	 * disassociate - Request driver to disassociate
-	 * @priv: private driver interface data
-	 * @addr: peer address (BSSID of the AP)
-	 * @reason_code: 16-bit reason code to be sent in the disassociation
-	 *	frame
-	 *
-	 * Returns: 0 on success, -1 on failure
-	 */
-	int (*disassociate)(void *priv, const u8 *addr, int reason_code);
 
 	/**
 	 * associate - Request driver to associate

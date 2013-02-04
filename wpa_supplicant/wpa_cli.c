@@ -28,7 +28,7 @@
 
 static const char *wpa_cli_version =
 "wpa_cli v" VERSION_STR "\n"
-"Copyright (c) 2004-2012, Jouni Malinen <j@w1.fi> and contributors";
+"Copyright (c) 2004-2013, Jouni Malinen <j@w1.fi> and contributors";
 
 
 static const char *wpa_cli_license =
@@ -736,24 +736,6 @@ static int wpa_cli_cmd_wps_cancel(struct wpa_ctrl *ctrl, int argc,
 }
 
 
-#ifdef CONFIG_WPS_OOB
-static int wpa_cli_cmd_wps_oob(struct wpa_ctrl *ctrl, int argc, char *argv[])
-{
-	if (argc != 3) {
-		printf("Invalid WPS_OOB command: need three "
-		       "arguments:\n"
-		       "- DEV_TYPE: use 'ufd'\n"
-		       "- PATH: path of OOB device like '/mnt'\n"
-		       "- METHOD: OOB method 'pin-e' or 'pin-r', "
-		       "'cred'\n");
-		return -1;
-	}
-
-	return wpa_cli_cmd(ctrl, "WPS_OOB", 3, argc, argv);
-}
-#endif /* CONFIG_WPS_OOB */
-
-
 #ifdef CONFIG_WPS_NFC
 
 static int wpa_cli_cmd_wps_nfc(struct wpa_ctrl *ctrl, int argc, char *argv[])
@@ -1368,7 +1350,7 @@ static int wpa_cli_cmd_set_network(struct wpa_ctrl *ctrl, int argc,
 		return 0;
 	}
 
-	if (argc != 3) {
+	if (argc < 3) {
 		printf("Invalid SET_NETWORK command: needs three arguments\n"
 		       "(network id, variable name, and value)\n");
 		return -1;
@@ -2265,6 +2247,16 @@ static int wpa_cli_cmd_autoscan(struct wpa_ctrl *ctrl, int argc, char *argv[])
 #endif /* CONFIG_AUTOSCAN */
 
 
+#ifdef CONFIG_WNM
+
+static int wpa_cli_cmd_wnm_sleep(struct wpa_ctrl *ctrl, int argc, char *argv[])
+{
+	return wpa_cli_cmd(ctrl, "WNM_SLEEP", 0, argc, argv);
+}
+
+#endif /* CONFIG_WNM */
+
+
 static int wpa_cli_cmd_raw(struct wpa_ctrl *ctrl, int argc, char *argv[])
 {
 	if (argc == 0)
@@ -2485,11 +2477,6 @@ static struct wpa_cli_cmd wpa_cli_commands[] = {
 	  "<PIN> = verify PIN checksum" },
 	{ "wps_cancel", wpa_cli_cmd_wps_cancel, NULL, cli_cmd_flag_none,
 	  "Cancels the pending WPS operation" },
-#ifdef CONFIG_WPS_OOB
-	{ "wps_oob", wpa_cli_cmd_wps_oob, NULL,
-	  cli_cmd_flag_sensitive,
-	  "<DEV_TYPE> <PATH> <METHOD> = start WPS OOB" },
-#endif /* CONFIG_WPS_OOB */
 #ifdef CONFIG_WPS_NFC
 	{ "wps_nfc", wpa_cli_cmd_wps_nfc, wpa_cli_complete_bss,
 	  cli_cmd_flag_none,
@@ -2712,6 +2699,10 @@ static struct wpa_cli_cmd wpa_cli_commands[] = {
 	{ "autoscan", wpa_cli_cmd_autoscan, NULL, cli_cmd_flag_none,
 	  "[params] = Set or unset (if none) autoscan parameters" },
 #endif /* CONFIG_AUTOSCAN */
+#ifdef CONFIG_WNM
+	{ "wnm_sleep", wpa_cli_cmd_wnm_sleep, NULL, cli_cmd_flag_none,
+	  "<enter/exit> [interval=#] = enter/exit WNM-Sleep mode" },
+#endif /* CONFIG_WNM */
 	{ "raw", wpa_cli_cmd_raw, NULL, cli_cmd_flag_sensitive,
 	  "<params..> = Sent unprocessed command" },
 	{ NULL, NULL, NULL, cli_cmd_flag_none, NULL }

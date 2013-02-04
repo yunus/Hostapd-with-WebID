@@ -73,6 +73,7 @@ OBJS += src/ap/utils.c
 OBJS += src/ap/authsrv.c
 OBJS += src/ap/ieee802_1x.c
 OBJS += src/ap/ap_config.c
+OBJS += src/ap/eap_user_db.c
 OBJS += src/ap/ieee802_11_auth.c
 OBJS += src/ap/sta_info.c
 OBJS += src/ap/wpa_auth.c
@@ -201,6 +202,9 @@ endif
 
 ifdef CONFIG_SAE
 L_CFLAGS += -DCONFIG_SAE
+OBJS += src/common/sae.c
+NEED_ECC=y
+NEED_DH_GROUPS=y
 endif
 
 ifdef CONFIG_IEEE80211N
@@ -368,12 +372,6 @@ NEED_BASE64=y
 NEED_AES_CBC=y
 NEED_MODEXP=y
 CONFIG_EAP=y
-
-ifdef CONFIG_WPS_UFD
-L_CFLAGS += -DCONFIG_WPS_UFD
-OBJS += src/wps/wps_ufd.c
-NEED_WPS_OOB=y
-endif
 
 ifdef CONFIG_WPS_NFC
 L_CFLAGS += -DCONFIG_WPS_NFC
@@ -738,6 +736,10 @@ ifdef CONFIG_INTERNAL_DH_GROUP5
 ifdef NEED_DH_GROUPS
 OBJS += src/crypto/dh_group5.c
 endif
+endif
+
+ifdef NEED_ECC
+L_CFLAGS += -DCONFIG_ECC
 endif
 
 ifdef CONFIG_NO_RANDOM_POOL

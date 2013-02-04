@@ -181,6 +181,9 @@ endif
 
 ifdef CONFIG_SAE
 L_CFLAGS += -DCONFIG_SAE
+OBJS += src/common/sae.c
+NEED_ECC=y
+NEED_DH_GROUPS=y
 endif
 
 ifdef CONFIG_TDLS
@@ -552,7 +555,7 @@ endif
 ifdef CONFIG_EAP_PWD
 L_CFLAGS += -DEAP_PWD
 OBJS += src/eap_peer/eap_pwd.c src/eap_common/eap_pwd_common.c
-OBJS_h += src/eap_server/eap_pwd.c
+OBJS_h += src/eap_server/eap_server_pwd.c
 CONFIG_IEEE8021X_EAPOL=y
 NEED_SHA256=y
 endif
@@ -583,12 +586,6 @@ NEED_BASE64=y
 NEED_80211_COMMON=y
 NEED_AES_CBC=y
 NEED_MODEXP=y
-
-ifdef CONFIG_WPS_UFD
-L_CFLAGS += -DCONFIG_WPS_UFD
-OBJS += src/wps/wps_ufd.c
-NEED_WPS_OOB=y
-endif
 
 ifdef CONFIG_WPS_NFC
 L_CFLAGS += -DCONFIG_WPS_NFC
@@ -719,6 +716,7 @@ OBJS += src/ap/ieee802_11_shared.c
 OBJS += src/ap/drv_callbacks.c
 OBJS += src/ap/ap_drv_ops.c
 OBJS += src/ap/beacon.c
+OBJS += src/ap/eap_user_db.c
 ifdef CONFIG_IEEE80211N
 OBJS += src/ap/ieee802_11_ht.c
 endif
@@ -851,7 +849,11 @@ NEED_DES=y
 # Shared TLS functions (needed for EAP_TLS, EAP_PEAP, EAP_TTLS, and EAP_FAST)
 OBJS += src/eap_peer/eap_tls_common.c
 OBJS_h += src/eap_server/eap_server_tls_common.c
+ifndef CONFIG_FIPS
 NEED_TLS_PRF=y
+NEED_SHA1=y
+NEED_MD5=y
+endif
 endif
 
 ifndef CONFIG_TLS
@@ -1152,6 +1154,10 @@ ifdef CONFIG_INTERNAL_DH_GROUP5
 ifdef NEED_DH_GROUPS
 OBJS += src/crypto/dh_group5.c
 endif
+endif
+
+ifdef NEED_ECC
+L_CFLAGS += -DCONFIG_ECC
 endif
 
 ifdef CONFIG_NO_RANDOM_POOL
