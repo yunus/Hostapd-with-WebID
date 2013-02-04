@@ -1,3 +1,36 @@
+
+In this repository, you find [WebID](http://www.w3.org/2005/Incubator/webid/spec/) integrated hostapd.
+the standalone EAPserver with openssl library is able to use WebID authentication in EAP-TLS.
+
+[WebID](http://www.w3.org/2005/Incubator/webid/spec/) is an authentication protocol which uses 
+certificates and social networks. The certificates are trusted without a PKI or WoT.
+Every certificate should include a link to the web profile of the owner.  
+From the Profile page which is possibly implemented in FOAF ontology language, 
+authentication and authorization steps are done.
+
+Authentication
+-----------------
+For just authentication librdf is required which is also mentioned in the
+Makefile and defconfig. Librdf is used to fetch the public key of the owner
+that is published in the profile page. In the defconfig and hostapd.config
+you can find the related preprocessor statements.
+Works only with openssl. 
+The code is patly inspired by [mod_authn_webid](http://dig.csail.mit.edu/2009/mod_authn_webid/).
+
+Authorization
+----------------
+Authorization is done based on the social network links between the AP 
+owner and the client. Since this step requires many https calls, an 
+external Python library is implemented. [python-webid](https://github.com/yunus/python-webid)
+library is called via python-c api. For compilation again the flags are 
+in defconfig and Python.h (2.7) is required. 
+
+Other configuration parameters can be found in hostapd.config file with
+their explanations.
+
+
+
+
 wpa_supplicant and hostapd
 --------------------------
 
