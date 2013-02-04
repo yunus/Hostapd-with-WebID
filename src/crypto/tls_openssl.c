@@ -61,9 +61,6 @@ struct tls_global {
 			 union tls_event_data *data);
 	void *cb_ctx;
 	int cert_in_cb;
-#ifdef EAP_SERVER_STLS_AUTHORIZATION
-	char *serv_webid;
-#endif
 
 };
 
@@ -1291,9 +1288,24 @@ wpa_printf(MSG_DEBUG, "TLS: tls_verify_cb - preverify_ok=%d "
 		   conn->ca_cert_verify, depth, buf);
 	
 #ifdef EAP_SERVER_STLS
+	
+	/* In the PKI case there are 3 errors. We are omitting two of them and checking the third only. */
+	if(!preverify_ok && (err == X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY ||
+		err == X509_V_ERR_CERT_UNTRUSTED)){
+			
+			preverify_ok = 1;
+			wpa_printf(MSG_DEBUG, "STLS: the error %d (%s) is omitted since"
+			" we do not want to check repeatedly for each of the errors.",err, err_str);
+			
+	}
 
-	/*Only if the verification error is SELF SIGNED then employ webid auth*/
-	if(!preverify_ok && err == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT) {		
+	/* Only if the verification error is SELF SIGNED or PKI fails then employ webid auth */
+	/* The CA signed certificates are open to mitm attacks. We should check the certificate */
+	/* even if the validation duration has passed. */
+	if(!preverify_ok && (err == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT || 
+		err == X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE || 
+		err == X509_V_ERR_CERT_NOT_YET_VALID ||
+		err == X509_V_ERR_CERT_HAS_EXPIRED)) {		
 		
 		subjectAltname = extract_uri_from_subjectAltName(err_cert);   	
     
