@@ -1,6 +1,6 @@
 /*
  * wpa_supplicant / WPS integration
- * Copyright (c) 2008-2012, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2008-2013, Jouni Malinen <j@w1.fi>
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
@@ -84,6 +84,10 @@ int wpas_wps_eapol_cb(struct wpa_supplicant *wpa_s)
 	    !(wpa_s->current_ssid->key_mgmt & WPA_KEY_MGMT_WPS)) {
 		int disabled = wpa_s->current_ssid->disabled;
 		unsigned int freq = wpa_s->assoc_freq;
+		struct wpa_bss *bss;
+		struct wpa_ssid *ssid = NULL;
+		int use_fast_assoc = 0;
+
 		wpa_printf(MSG_DEBUG, "WPS: Network configuration replaced - "
 			   "try to associate with the received credential "
 			   "(freq=%u)", freq);
@@ -98,7 +102,26 @@ int wpas_wps_eapol_cb(struct wpa_supplicant *wpa_s)
 		wpa_s->wps_freq = freq;
 		wpa_s->normal_scans = 0;
 		wpa_s->reassociate = 1;
-		wpa_supplicant_req_scan(wpa_s, 0, 0);
+
+		wpa_printf(MSG_DEBUG, "WPS: Checking whether fast association "
+			   "without a new scan can be used");
+		bss = wpa_supplicant_pick_network(wpa_s, &ssid);
+		if (bss) {
+			struct wpabuf *wps;
+			struct wps_parse_attr attr;
+
+			wps = wpa_bss_get_vendor_ie_multi(bss,
+							  WPS_IE_VENDOR_TYPE);
+			if (wps && wps_parse_msg(wps, &attr) == 0 &&
+			    attr.wps_state &&
+			    *attr.wps_state == WPS_STATE_CONFIGURED)
+				use_fast_assoc = 1;
+			wpabuf_free(wps);
+		}
+
+		if (!use_fast_assoc ||
+		    wpa_supplicant_fast_associate(wpa_s) != 1)
+			wpa_supplicant_req_scan(wpa_s, 0, 0);
 		return 1;
 	}
 
@@ -192,6 +215,80 @@ static void wpas_wps_security_workaround(struct wpa_supplicant *wpa_s,
 			ssid->proto |= WPA_PROTO_RSN;
 		else
 			ssid->proto = WPA_PROTO_RSN;
+	}
+}
+
+
+static void wpas_wps_remove_dup_network(struct wpa_supplicant *wpa_s,
+					struct wpa_ssid *new_ssid)
+{
+	struct wpa_ssid *ssid, *next;
+
+	for (ssid = wpa_s->conf->ssid, next = ssid ? ssid->next : NULL; ssid;
+	     ssid = next, next = ssid ? ssid->next : NULL) {
+		/*
+		 * new_ssid has already been added to the list in
+		 * wpas_wps_add_network(), so skip it.
+		 */
+		if (ssid == new_ssid)
+			continue;
+
+		if (ssid->bssid_set || new_ssid->bssid_set) {
+			if (ssid->bssid_set != new_ssid->bssid_set)
+				continue;
+			if (os_memcmp(ssid->bssid, new_ssid->bssid, ETH_ALEN) !=
+			    0)
+				continue;
+		}
+
+		/* compare SSID */
+		if (ssid->ssid_len == 0 || ssid->ssid_len != new_ssid->ssid_len)
+			continue;
+
+		if (ssid->ssid && new_ssid->ssid) {
+			if (os_memcmp(ssid->ssid, new_ssid->ssid,
+				      ssid->ssid_len) != 0)
+				continue;
+		} else if (ssid->ssid || new_ssid->ssid)
+			continue;
+
+		/* compare security parameters */
+		if (ssid->auth_alg != new_ssid->auth_alg ||
+		    ssid->key_mgmt != new_ssid->key_mgmt ||
+		    ssid->proto != new_ssid->proto ||
+		    ssid->pairwise_cipher != new_ssid->pairwise_cipher ||
+		    ssid->group_cipher != new_ssid->group_cipher)
+			continue;
+
+		if (ssid->passphrase && new_ssid->passphrase) {
+			if (os_strlen(ssid->passphrase) !=
+			    os_strlen(new_ssid->passphrase))
+				continue;
+			if (os_strcmp(ssid->passphrase, new_ssid->passphrase) !=
+			    0)
+				continue;
+		} else if (ssid->passphrase || new_ssid->passphrase)
+			continue;
+
+		if ((ssid->psk_set || new_ssid->psk_set) &&
+		    os_memcmp(ssid->psk, new_ssid->psk, sizeof(ssid->psk)) != 0)
+			continue;
+
+		if (ssid->auth_alg == WPA_ALG_WEP) {
+			if (ssid->wep_tx_keyidx != new_ssid->wep_tx_keyidx)
+				continue;
+			if (os_memcmp(ssid->wep_key, new_ssid->wep_key,
+				      sizeof(ssid->wep_key)))
+				continue;
+			if (os_memcmp(ssid->wep_key_len, new_ssid->wep_key_len,
+				      sizeof(ssid->wep_key_len)))
+				continue;
+		}
+
+		/* Remove the duplicated older network entry. */
+		wpa_printf(MSG_DEBUG, "Remove duplicate network %d", ssid->id);
+		wpas_notify_network_removed(wpa_s, ssid);
+		wpa_config_remove_network(wpa_s->conf, ssid->id);
 	}
 }
 
@@ -415,6 +512,8 @@ static int wpa_supplicant_wps_cred(void *ctx,
 	if (cred->ap_channel)
 		wpa_s->wps_ap_channel = cred->ap_channel;
 
+	wpas_wps_remove_dup_network(wpa_s, ssid);
+
 #ifndef CONFIG_NO_CONFIG_WRITE
 	if (wpa_s->conf->update_config &&
 	    wpa_config_write(wpa_s->confname, wpa_s->conf)) {
@@ -549,6 +648,9 @@ static void wpa_supplicant_wps_event_success(struct wpa_supplicant *wpa_s)
 	wpa_msg(wpa_s, MSG_INFO, WPS_EVENT_SUCCESS);
 	wpa_s->wps_success = 1;
 	wpas_notify_wps_event_success(wpa_s);
+	if (wpa_s->current_ssid)
+		wpas_clear_temp_disabled(wpa_s, wpa_s->current_ssid, 1);
+	wpa_s->extra_blacklist_count = 0;
 
 	/*
 	 * Enable the networks disabled during wpas_wps_reassoc after 10
@@ -766,9 +868,8 @@ static void wpas_clear_wps(struct wpa_supplicant *wpa_s)
 	while (ssid) {
 		if (ssid->key_mgmt & WPA_KEY_MGMT_WPS) {
 			if (ssid == wpa_s->current_ssid) {
-				wpa_s->current_ssid = NULL;
-				if (ssid != NULL)
-					wpas_notify_network_changed(wpa_s);
+				wpa_supplicant_deauthenticate(
+					wpa_s, WLAN_REASON_DEAUTH_LEAVING);
 			}
 			id = ssid->id;
 			remove_ssid = ssid;
@@ -865,20 +966,10 @@ static struct wpa_ssid * wpas_wps_add_network(struct wpa_supplicant *wpa_s,
 }
 
 
-static void wpas_wps_reassoc(struct wpa_supplicant *wpa_s,
-			     struct wpa_ssid *selected, const u8 *bssid)
+static void wpas_wps_temp_disable(struct wpa_supplicant *wpa_s,
+				  struct wpa_ssid *selected)
 {
 	struct wpa_ssid *ssid;
-	struct wpa_bss *bss;
-
-	wpa_s->known_wps_freq = 0;
-	if (bssid) {
-		bss = wpa_bss_get_bssid(wpa_s, bssid);
-		if (bss && bss->freq > 0) {
-			wpa_s->known_wps_freq = 1;
-			wpa_s->wps_freq = bss->freq;
-		}
-	}
 
 	if (wpa_s->current_ssid)
 		wpa_supplicant_deauthenticate(
@@ -906,6 +997,26 @@ static void wpas_wps_reassoc(struct wpa_supplicant *wpa_s,
 		}
 		ssid = ssid->next;
 	}
+}
+
+
+static void wpas_wps_reassoc(struct wpa_supplicant *wpa_s,
+			     struct wpa_ssid *selected, const u8 *bssid)
+{
+	struct wpa_bss *bss;
+
+	wpa_s->after_wps = 0;
+	wpa_s->known_wps_freq = 0;
+	if (bssid) {
+		bss = wpa_bss_get_bssid_latest(wpa_s, bssid);
+		if (bss && bss->freq > 0) {
+			wpa_s->known_wps_freq = 1;
+			wpa_s->wps_freq = bss->freq;
+		}
+	}
+
+	wpas_wps_temp_disable(wpa_s, selected);
+
 	wpa_s->disconnected = 0;
 	wpa_s->reassociate = 1;
 	wpa_s->scan_runs = 0;
@@ -1581,91 +1692,128 @@ int wpas_wps_er_add_pin(struct wpa_supplicant *wpa_s, const u8 *addr,
 			const char *uuid, const char *pin)
 {
 	u8 u[UUID_LEN];
-	int any = 0;
+	const u8 *use_uuid = NULL;
+	u8 addr_buf[ETH_ALEN];
 
-	if (os_strcmp(uuid, "any") == 0)
-		any = 1;
-	else if (uuid_str2bin(uuid, u))
+	if (os_strcmp(uuid, "any") == 0) {
+	} else if (uuid_str2bin(uuid, u) == 0) {
+		use_uuid = u;
+	} else if (hwaddr_aton(uuid, addr_buf) == 0) {
+		use_uuid = wps_er_get_sta_uuid(wpa_s->wps_er, addr_buf);
+		if (use_uuid == NULL)
+			return -1;
+	} else
 		return -1;
 	return wps_registrar_add_pin(wpa_s->wps->registrar, addr,
-				     any ? NULL : u,
+				     use_uuid,
 				     (const u8 *) pin, os_strlen(pin), 300);
 }
 
 
 int wpas_wps_er_pbc(struct wpa_supplicant *wpa_s, const char *uuid)
 {
-	u8 u[UUID_LEN];
+	u8 u[UUID_LEN], *use_uuid = NULL;
+	u8 addr[ETH_ALEN], *use_addr = NULL;
 
-	if (uuid_str2bin(uuid, u))
+	if (uuid_str2bin(uuid, u) == 0)
+		use_uuid = u;
+	else if (hwaddr_aton(uuid, addr) == 0)
+		use_addr = addr;
+	else
 		return -1;
-	return wps_er_pbc(wpa_s->wps_er, u);
+	return wps_er_pbc(wpa_s->wps_er, use_uuid, use_addr);
 }
 
 
 int wpas_wps_er_learn(struct wpa_supplicant *wpa_s, const char *uuid,
 		      const char *pin)
 {
-	u8 u[UUID_LEN];
+	u8 u[UUID_LEN], *use_uuid = NULL;
+	u8 addr[ETH_ALEN], *use_addr = NULL;
 
-	if (uuid_str2bin(uuid, u))
+	if (uuid_str2bin(uuid, u) == 0)
+		use_uuid = u;
+	else if (hwaddr_aton(uuid, addr) == 0)
+		use_addr = addr;
+	else
 		return -1;
-	return wps_er_learn(wpa_s->wps_er, u, (const u8 *) pin,
+
+	return wps_er_learn(wpa_s->wps_er, use_uuid, use_addr, (const u8 *) pin,
 			    os_strlen(pin));
+}
+
+
+static int wpas_wps_network_to_cred(struct wpa_ssid *ssid,
+				    struct wps_credential *cred)
+{
+	os_memset(cred, 0, sizeof(*cred));
+	if (ssid->ssid_len > 32)
+		return -1;
+	os_memcpy(cred->ssid, ssid->ssid, ssid->ssid_len);
+	cred->ssid_len = ssid->ssid_len;
+	if (ssid->key_mgmt & WPA_KEY_MGMT_PSK) {
+		cred->auth_type = (ssid->proto & WPA_PROTO_RSN) ?
+			WPS_AUTH_WPA2PSK : WPS_AUTH_WPAPSK;
+		if (ssid->pairwise_cipher & WPA_CIPHER_CCMP)
+			cred->encr_type = WPS_ENCR_AES;
+		else
+			cred->encr_type = WPS_ENCR_TKIP;
+		if (ssid->passphrase) {
+			cred->key_len = os_strlen(ssid->passphrase);
+			if (cred->key_len >= 64)
+				return -1;
+			os_memcpy(cred->key, ssid->passphrase, cred->key_len);
+		} else if (ssid->psk_set) {
+			cred->key_len = 32;
+			os_memcpy(cred->key, ssid->psk, 32);
+		} else
+			return -1;
+	} else {
+		cred->auth_type = WPS_AUTH_OPEN;
+		cred->encr_type = WPS_ENCR_NONE;
+	}
+
+	return 0;
 }
 
 
 int wpas_wps_er_set_config(struct wpa_supplicant *wpa_s, const char *uuid,
 			   int id)
 {
-	u8 u[UUID_LEN];
+	u8 u[UUID_LEN], *use_uuid = NULL;
+	u8 addr[ETH_ALEN], *use_addr = NULL;
 	struct wpa_ssid *ssid;
 	struct wps_credential cred;
 
-	if (uuid_str2bin(uuid, u))
+	if (uuid_str2bin(uuid, u) == 0)
+		use_uuid = u;
+	else if (hwaddr_aton(uuid, addr) == 0)
+		use_addr = addr;
+	else
 		return -1;
 	ssid = wpa_config_get_network(wpa_s->conf, id);
 	if (ssid == NULL || ssid->ssid == NULL)
 		return -1;
 
-	os_memset(&cred, 0, sizeof(cred));
-	if (ssid->ssid_len > 32)
+	if (wpas_wps_network_to_cred(ssid, &cred) < 0)
 		return -1;
-	os_memcpy(cred.ssid, ssid->ssid, ssid->ssid_len);
-	cred.ssid_len = ssid->ssid_len;
-	if (ssid->key_mgmt & WPA_KEY_MGMT_PSK) {
-		cred.auth_type = (ssid->proto & WPA_PROTO_RSN) ?
-			WPS_AUTH_WPA2PSK : WPS_AUTH_WPAPSK;
-		if (ssid->pairwise_cipher & WPA_CIPHER_CCMP)
-			cred.encr_type = WPS_ENCR_AES;
-		else
-			cred.encr_type = WPS_ENCR_TKIP;
-		if (ssid->passphrase) {
-			cred.key_len = os_strlen(ssid->passphrase);
-			if (cred.key_len >= 64)
-				return -1;
-			os_memcpy(cred.key, ssid->passphrase, cred.key_len);
-		} else if (ssid->psk_set) {
-			cred.key_len = 32;
-			os_memcpy(cred.key, ssid->psk, 32);
-		} else
-			return -1;
-	} else {
-		cred.auth_type = WPS_AUTH_OPEN;
-		cred.encr_type = WPS_ENCR_NONE;
-	}
-	return wps_er_set_config(wpa_s->wps_er, u, &cred);
+	return wps_er_set_config(wpa_s->wps_er, use_uuid, use_addr, &cred);
 }
 
 
 int wpas_wps_er_config(struct wpa_supplicant *wpa_s, const char *uuid,
 		       const char *pin, struct wps_new_ap_settings *settings)
 {
-	u8 u[UUID_LEN];
+	u8 u[UUID_LEN], *use_uuid = NULL;
+	u8 addr[ETH_ALEN], *use_addr = NULL;
 	struct wps_credential cred;
 	size_t len;
 
-	if (uuid_str2bin(uuid, u))
+	if (uuid_str2bin(uuid, u) == 0)
+		use_uuid = u;
+	else if (hwaddr_aton(uuid, addr) == 0)
+		use_addr = addr;
+	else
 		return -1;
 	if (settings->ssid_hex == NULL || settings->auth == NULL ||
 	    settings->encr == NULL || settings->key_hex == NULL)
@@ -1704,8 +1852,8 @@ int wpas_wps_er_config(struct wpa_supplicant *wpa_s, const char *uuid,
 	else
 		return -1;
 
-	return wps_er_config(wpa_s->wps_er, u, (const u8 *) pin,
-			     os_strlen(pin), &cred);
+	return wps_er_config(wpa_s->wps_er, use_uuid, use_addr,
+			     (const u8 *) pin, os_strlen(pin), &cred);
 }
 
 
@@ -1714,15 +1862,20 @@ struct wpabuf * wpas_wps_er_nfc_config_token(struct wpa_supplicant *wpa_s,
 					     int ndef, const char *uuid)
 {
 	struct wpabuf *ret;
-	u8 u[UUID_LEN];
+	u8 u[UUID_LEN], *use_uuid = NULL;
+	u8 addr[ETH_ALEN], *use_addr = NULL;
 
 	if (!wpa_s->wps_er)
 		return NULL;
 
-	if (uuid_str2bin(uuid, u))
+	if (uuid_str2bin(uuid, u) == 0)
+		use_uuid = u;
+	else if (hwaddr_aton(uuid, addr) == 0)
+		use_addr = addr;
+	else
 		return NULL;
 
-	ret = wps_er_nfc_config_token(wpa_s->wps_er, u);
+	ret = wps_er_nfc_config_token(wpa_s->wps_er, use_uuid, use_addr);
 	if (ndef && ret) {
 		struct wpabuf *tmp;
 		tmp = ndef_build_wifi(ret);
@@ -1830,8 +1983,69 @@ void wpas_wps_update_config(struct wpa_supplicant *wpa_s)
 
 #ifdef CONFIG_WPS_NFC
 
+#ifdef CONFIG_WPS_ER
+static struct wpabuf *
+wpas_wps_network_config_token(struct wpa_supplicant *wpa_s, int ndef,
+			      struct wpa_ssid *ssid)
+{
+	struct wpabuf *ret;
+	struct wps_credential cred;
+
+	if (wpas_wps_network_to_cred(ssid, &cred) < 0)
+		return NULL;
+
+	ret = wps_er_config_token_from_cred(wpa_s->wps, &cred);
+
+	if (ndef && ret) {
+		struct wpabuf *tmp;
+		tmp = ndef_build_wifi(ret);
+		wpabuf_free(ret);
+		if (tmp == NULL)
+			return NULL;
+		ret = tmp;
+	}
+
+	return ret;
+}
+#endif /* CONFIG_WPS_ER */
+
+
+struct wpabuf * wpas_wps_nfc_config_token(struct wpa_supplicant *wpa_s,
+					  int ndef, const char *id_str)
+{
+#ifdef CONFIG_WPS_ER
+	if (id_str) {
+		int id;
+		char *end = NULL;
+		struct wpa_ssid *ssid;
+
+		id = strtol(id_str, &end, 10);
+		if (end && *end)
+			return NULL;
+
+		ssid = wpa_config_get_network(wpa_s->conf, id);
+		if (ssid == NULL)
+			return NULL;
+		return wpas_wps_network_config_token(wpa_s, ndef, ssid);
+	}
+#endif /* CONFIG_WPS_ER */
+#ifdef CONFIG_AP
+	if (wpa_s->ap_iface)
+		return wpas_ap_wps_nfc_config_token(wpa_s, ndef);
+#endif /* CONFIG_AP */
+	return NULL;
+}
+
+
 struct wpabuf * wpas_wps_nfc_token(struct wpa_supplicant *wpa_s, int ndef)
 {
+	if (wpa_s->conf->wps_nfc_pw_from_config) {
+		return wps_nfc_token_build(ndef,
+					   wpa_s->conf->wps_nfc_dev_pw_id,
+					   wpa_s->conf->wps_nfc_dh_pubkey,
+					   wpa_s->conf->wps_nfc_dev_pw);
+	}
+
 	return wps_nfc_token_gen(ndef, &wpa_s->conf->wps_nfc_dev_pw_id,
 				 &wpa_s->conf->wps_nfc_dh_pubkey,
 				 &wpa_s->conf->wps_nfc_dh_privkey,
@@ -1863,8 +2077,13 @@ int wpas_wps_start_nfc(struct wpa_supplicant *wpa_s, const u8 *bssid)
 		return -1;
 	}
 	wps->dh_ctx = dh5_init_fixed(wps->dh_privkey, wps->dh_pubkey);
-	if (wps->dh_ctx == NULL)
+	if (wps->dh_ctx == NULL) {
+		wpabuf_free(wps->dh_pubkey);
+		wps->dh_pubkey = NULL;
+		wpabuf_free(wps->dh_privkey);
+		wps->dh_privkey = NULL;
 		return -1;
+	}
 
 	wpa_snprintf_hex_uppercase(pw, sizeof(pw),
 				   wpabuf_head(wpa_s->conf->wps_nfc_dev_pw),
@@ -1878,6 +2097,15 @@ static int wpas_wps_use_cred(struct wpa_supplicant *wpa_s,
 			     struct wps_parse_attr *attr)
 {
 	wpa_s->wps_ap_channel = 0;
+
+	/*
+	 * Disable existing networks temporarily to allow the newly learned
+	 * credential to be preferred. Enable the temporarily disabled networks
+	 * after 10 seconds.
+	 */
+	wpas_wps_temp_disable(wpa_s, NULL);
+	eloop_register_timeout(10, 0, wpas_wps_reenable_networks_cb, wpa_s,
+			       NULL);
 
 	if (wps_oob_use_cred(wpa_s->wps, attr) < 0)
 		return -1;
@@ -1977,15 +2205,67 @@ int wpas_wps_nfc_tag_read(struct wpa_supplicant *wpa_s,
 }
 
 
-struct wpabuf * wpas_wps_nfc_handover_req(struct wpa_supplicant *wpa_s)
+struct wpabuf * wpas_wps_nfc_handover_req(struct wpa_supplicant *wpa_s, int cr)
 {
+	if (cr)
+		return ndef_build_wifi_hc(1);
 	return ndef_build_wifi_hr();
 }
 
 
-struct wpabuf * wpas_wps_nfc_handover_sel(struct wpa_supplicant *wpa_s)
+#ifdef CONFIG_WPS_NFC
+struct wpabuf * wpas_wps_er_nfc_handover_sel(struct wpa_supplicant *wpa_s,
+					     int ndef, const char *uuid)
 {
+#ifdef CONFIG_WPS_ER
+	struct wpabuf *ret;
+	u8 u[UUID_LEN], *use_uuid = NULL;
+	u8 addr[ETH_ALEN], *use_addr = NULL;
+
+	if (!wpa_s->wps_er)
+		return NULL;
+
+	if (uuid == NULL)
+		return NULL;
+	if (uuid_str2bin(uuid, u) == 0)
+		use_uuid = u;
+	else if (hwaddr_aton(uuid, addr) == 0)
+		use_addr = addr;
+	else
+		return NULL;
+
+	/*
+	 * Handover Select carrier record for WPS uses the same format as
+	 * configuration token.
+	 */
+	ret = wps_er_nfc_config_token(wpa_s->wps_er, use_uuid, use_addr);
+	if (ndef && ret) {
+		struct wpabuf *tmp;
+		tmp = ndef_build_wifi(ret);
+		wpabuf_free(ret);
+		if (tmp == NULL)
+			return NULL;
+		ret = tmp;
+	}
+
+	return ret;
+#else /* CONFIG_WPS_ER */
 	return NULL;
+#endif /* CONFIG_WPS_ER */
+}
+#endif /* CONFIG_WPS_NFC */
+
+
+struct wpabuf * wpas_wps_nfc_handover_sel(struct wpa_supplicant *wpa_s,
+					  int ndef, int cr, const char *uuid)
+{
+	struct wpabuf *ret;
+	if (!cr)
+		return NULL;
+	ret = wpas_ap_wps_nfc_handover_sel(wpa_s, ndef);
+	if (ret)
+		return ret;
+	return wpas_wps_er_nfc_handover_sel(wpa_s, ndef, uuid);
 }
 
 
@@ -2013,6 +2293,17 @@ int wpas_wps_nfc_rx_handover_sel(struct wpa_supplicant *wpa_s,
 	wpabuf_free(wps);
 
 	return ret;
+}
+
+
+int wpas_wps_nfc_report_handover(struct wpa_supplicant *wpa_s,
+				 const struct wpabuf *req,
+				 const struct wpabuf *sel)
+{
+	wpa_printf(MSG_DEBUG, "NFC: WPS connection handover reported");
+	wpa_hexdump_buf_key(MSG_DEBUG, "WPS: Carrier record in request", req);
+	wpa_hexdump_buf_key(MSG_DEBUG, "WPS: Carrier record in select", sel);
+	return wpas_wps_nfc_rx_handover_sel(wpa_s, sel);
 }
 
 #endif /* CONFIG_WPS_NFC */

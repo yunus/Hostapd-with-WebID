@@ -55,21 +55,14 @@ static int wpa_supplicant_conf_ap(struct wpa_supplicant *wpa_s,
 		/* default channel 11 */
 		conf->hw_mode = HOSTAPD_MODE_IEEE80211G;
 		conf->channel = 11;
-	} else if (ssid->frequency >= 2412 && ssid->frequency <= 2472) {
-		conf->hw_mode = HOSTAPD_MODE_IEEE80211G;
-		conf->channel = (ssid->frequency - 2407) / 5;
-	} else if ((ssid->frequency >= 5180 && ssid->frequency <= 5240) ||
-		   (ssid->frequency >= 5745 && ssid->frequency <= 5825)) {
-		conf->hw_mode = HOSTAPD_MODE_IEEE80211A;
-		conf->channel = (ssid->frequency - 5000) / 5;
-	} else if (ssid->frequency >= 56160 + 2160 * 1 &&
-		   ssid->frequency <= 56160 + 2160 * 4) {
-		conf->hw_mode = HOSTAPD_MODE_IEEE80211AD;
-		conf->channel = (ssid->frequency - 56160) / 2160;
 	} else {
-		wpa_printf(MSG_ERROR, "Unsupported AP mode frequency: %d MHz",
-			   ssid->frequency);
-		return -1;
+		conf->hw_mode = ieee80211_freq_to_chan(ssid->frequency,
+						       &conf->channel);
+		if (conf->hw_mode == NUM_HOSTAPD_MODES) {
+			wpa_printf(MSG_ERROR, "Unsupported AP mode frequency: "
+				   "%d MHz", ssid->frequency);
+			return -1;
+		}
 	}
 
 	/* TODO: enable HT40 if driver supports it;
@@ -131,7 +124,9 @@ static int wpa_supplicant_conf_ap(struct wpa_supplicant *wpa_s,
 #endif /* CONFIG_IEEE80211N */
 
 #ifdef CONFIG_P2P
-	if (conf->hw_mode == HOSTAPD_MODE_IEEE80211G) {
+	if (conf->hw_mode == HOSTAPD_MODE_IEEE80211G &&
+	    (ssid->mode == WPAS_MODE_P2P_GO ||
+	     ssid->mode == WPAS_MODE_P2P_GROUP_FORMATION)) {
 		/* Remove 802.11b rates from supported and basic rate sets */
 		int *list = os_malloc(4 * sizeof(int));
 		if (list) {
@@ -209,6 +204,13 @@ static int wpa_supplicant_conf_ap(struct wpa_supplicant *wpa_s,
 
 	if (ssid->dtim_period)
 		bss->dtim_period = ssid->dtim_period;
+	else if (wpa_s->conf->dtim_period)
+		bss->dtim_period = wpa_s->conf->dtim_period;
+
+	if (ssid->beacon_int)
+		conf->beacon_int = ssid->beacon_int;
+	else if (wpa_s->conf->beacon_int)
+		conf->beacon_int = wpa_s->conf->beacon_int;
 
 	if ((bss->wpa & 2) && bss->rsn_pairwise == 0)
 		bss->rsn_pairwise = bss->wpa_pairwise;
@@ -242,6 +244,16 @@ static int wpa_supplicant_conf_ap(struct wpa_supplicant *wpa_s,
 		bss->wpa_group = WPA_CIPHER_NONE;
 		bss->wpa_pairwise = WPA_CIPHER_NONE;
 		bss->rsn_pairwise = WPA_CIPHER_NONE;
+	}
+
+	if (bss->wpa_group_rekey < 86400 && (bss->wpa & 2) &&
+	    (bss->wpa_group == WPA_CIPHER_CCMP ||
+	     bss->wpa_group == WPA_CIPHER_GCMP)) {
+		/*
+		 * Strong ciphers do not need frequent rekeying, so increase
+		 * the default GTK rekeying period to 24 hours.
+		 */
+		bss->wpa_group_rekey = 86400;
 	}
 
 #ifdef CONFIG_WPS
@@ -297,6 +309,11 @@ no_wps:
 		bss->max_num_sta = wpa_s->conf->max_num_sta;
 
 	bss->disassoc_low_ack = wpa_s->conf->disassoc_low_ack;
+
+	if (wpa_s->conf->ap_vendor_elements) {
+		bss->vendor_elements =
+			wpabuf_dup(wpa_s->conf->ap_vendor_elements);
+	}
 
 	return 0;
 }
@@ -477,6 +494,11 @@ int wpa_supplicant_create_ap(struct wpa_supplicant *wpa_s,
 
 	if (wpa_drv_associate(wpa_s, &params) < 0) {
 		wpa_msg(wpa_s, MSG_INFO, "Failed to start AP functionality");
+#ifdef CONFIG_P2P
+		if (ssid->mode == WPAS_MODE_P2P_GROUP_FORMATION &&
+		    wpa_s->global->p2p_group_formation == wpa_s)
+			wpas_p2p_group_formation_failed(wpa_s->parent);
+#endif /* CONFIG_P2P */
 		return -1;
 	}
 
@@ -486,6 +508,9 @@ int wpa_supplicant_create_ap(struct wpa_supplicant *wpa_s,
 	hapd_iface->owner = wpa_s;
 	hapd_iface->drv_flags = wpa_s->drv_flags;
 	hapd_iface->probe_resp_offloads = wpa_s->probe_resp_offloads;
+	hapd_iface->extended_capa = wpa_s->extended_capa;
+	hapd_iface->extended_capa_mask = wpa_s->extended_capa_mask;
+	hapd_iface->extended_capa_len = wpa_s->extended_capa_len;
 
 	wpa_s->ap_iface->conf = conf = hostapd_config_defaults();
 	if (conf == NULL) {
@@ -847,6 +872,34 @@ void wpa_supplicant_ap_pwd_auth_fail(struct wpa_supplicant *wpa_s)
 	os_free(hapd->conf->ap_pin);
 	hapd->conf->ap_pin = NULL;
 }
+
+
+#ifdef CONFIG_WPS_NFC
+
+struct wpabuf * wpas_ap_wps_nfc_config_token(struct wpa_supplicant *wpa_s,
+					     int ndef)
+{
+	struct hostapd_data *hapd;
+
+	if (wpa_s->ap_iface == NULL)
+		return NULL;
+	hapd = wpa_s->ap_iface->bss[0];
+	return hostapd_wps_nfc_config_token(hapd, ndef);
+}
+
+
+struct wpabuf * wpas_ap_wps_nfc_handover_sel(struct wpa_supplicant *wpa_s,
+					     int ndef)
+{
+	struct hostapd_data *hapd;
+
+	if (wpa_s->ap_iface == NULL)
+		return NULL;
+	hapd = wpa_s->ap_iface->bss[0];
+	return hostapd_wps_nfc_hs_cr(hapd, ndef);
+}
+
+#endif /* CONFIG_WPS_NFC */
 
 #endif /* CONFIG_WPS */
 

@@ -29,6 +29,12 @@
 #define HOSTAPD_CHAN_HT40MINUS 0x00000020
 #define HOSTAPD_CHAN_HT40 0x00000040
 
+#define HOSTAPD_CHAN_DFS_UNKNOWN 0x00000000
+#define HOSTAPD_CHAN_DFS_USABLE 0x00000100
+#define HOSTAPD_CHAN_DFS_UNAVAILABLE 0x00000200
+#define HOSTAPD_CHAN_DFS_AVAILABLE 0x00000300
+#define HOSTAPD_CHAN_DFS_MASK 0x00000300
+
 /**
  * struct hostapd_channel_data - Channel information
  */
@@ -55,6 +61,7 @@ struct hostapd_channel_data {
 };
 
 #define HOSTAPD_MODE_FLAG_HT_INFO_KNOWN BIT(0)
+#define HOSTAPD_MODE_FLAG_VHT_INFO_KNOWN BIT(1)
 
 /**
  * struct hostapd_hw_modes - Supported hardware mode information
@@ -122,6 +129,13 @@ struct hostapd_hw_modes {
 #define IEEE80211_CAP_IBSS	0x0002
 #define IEEE80211_CAP_PRIVACY	0x0010
 
+/* DMG (60 GHz) IEEE 802.11ad */
+/* type - bits 0..1 */
+#define IEEE80211_CAP_DMG_MASK	0x0003
+#define IEEE80211_CAP_DMG_IBSS	0x0001 /* Tx by: STA */
+#define IEEE80211_CAP_DMG_PBSS	0x0002 /* Tx by: PCP */
+#define IEEE80211_CAP_DMG_AP	0x0003 /* Tx by: AP */
+
 #define WPA_SCAN_QUAL_INVALID		BIT(0)
 #define WPA_SCAN_NOISE_INVALID		BIT(1)
 #define WPA_SCAN_LEVEL_INVALID		BIT(2)
@@ -180,10 +194,12 @@ struct wpa_scan_res {
  * struct wpa_scan_results - Scan results
  * @res: Array of pointers to allocated variable length scan result entries
  * @num: Number of entries in the scan result array
+ * @fetch_time: Time when the results were fetched from the driver
  */
 struct wpa_scan_results {
 	struct wpa_scan_res **res;
 	size_t num;
+	struct os_time fetch_time;
 };
 
 /**
@@ -559,6 +575,19 @@ struct wpa_driver_associate_params {
 	 */
 	const u8 *htcaps;       /* struct ieee80211_ht_capabilities * */
 	const u8 *htcaps_mask;  /* struct ieee80211_ht_capabilities * */
+
+#ifdef CONFIG_VHT_OVERRIDES
+	/**
+	 * disable_vht - Disable VHT for this connection
+	 */
+	int disable_vht;
+
+	/**
+	 * VHT capability overrides.
+	 */
+	const struct ieee80211_vht_capabilities *vhtcaps;
+	const struct ieee80211_vht_capabilities *vhtcaps_mask;
+#endif /* CONFIG_VHT_OVERRIDES */
 };
 
 enum hide_ssid {
@@ -802,10 +831,9 @@ struct wpa_driver_capa {
  * it cannot be used for P2P group operations or non-P2P purposes.
  */
 #define WPA_DRIVER_FLAGS_P2P_DEDICATED_INTERFACE	0x00000400
-/* This interface is P2P capable (P2P Device, GO, or P2P Client */
+/* This interface is P2P capable (P2P GO or P2P Client) */
 #define WPA_DRIVER_FLAGS_P2P_CAPABLE	0x00000800
-/* Driver supports concurrent operations on multiple channels */
-#define WPA_DRIVER_FLAGS_MULTI_CHANNEL_CONCURRENT	0x00001000
+/* unused: 0x00001000 */
 /*
  * Driver uses the initial interface for P2P management interface and non-P2P
  * purposes (e.g., connect to infra AP), but this interface cannot be used for
@@ -842,6 +870,12 @@ struct wpa_driver_capa {
 #define WPA_DRIVER_FLAGS_SAE				0x02000000
 /* Driver makes use of OBSS scan mechanism in wpa_supplicant */
 #define WPA_DRIVER_FLAGS_OBSS_SCAN			0x04000000
+/* Driver supports IBSS (Ad-hoc) mode */
+#define WPA_DRIVER_FLAGS_IBSS				0x08000000
+/* Driver supports radar detection */
+#define WPA_DRIVER_FLAGS_RADAR				0x10000000
+/* Driver supports a dedicated interface for P2P Device */
+#define WPA_DRIVER_FLAGS_DEDICATED_P2P_DEVICE		0x20000000
 	unsigned int flags;
 
 	int max_scan_ssids;
@@ -873,6 +907,22 @@ struct wpa_driver_capa {
 /* Driver Probe Response offloading support for IEEE 802.11u (Interworking) */
 #define WPA_DRIVER_PROBE_RESP_OFFLOAD_INTERWORKING	0x00000008
 	unsigned int probe_resp_offloads;
+
+	unsigned int max_acl_mac_addrs;
+
+	/**
+	 * Number of supported concurrent channels
+	 */
+	unsigned int num_multichan_concurrent;
+
+	/**
+	 * extended_capa - extended capabilities in driver/device
+	 *
+	 * Must be allocated and freed by driver and the pointers must be
+	 * valid for the lifetime of the driver, i.e., freed in deinit()
+	 */
+	const u8 *extended_capa, *extended_capa_mask;
+	unsigned int extended_capa_len;
 };
 
 
@@ -902,6 +952,8 @@ struct hostapd_sta_add_params {
 	u32 flags; /* bitmask of WPA_STA_* flags */
 	int set; /* Set STA parameters instead of add */
 	u8 qosinfo;
+	const u8 *ext_capab;
+	size_t ext_capab_len;
 };
 
 struct hostapd_freq_params {
@@ -921,6 +973,16 @@ struct hostapd_freq_params {
 	 * only for bandwidth 80 and an 80+80 channel */
 	int center_freq1, center_freq2;
 	int bandwidth;
+};
+
+struct mac_address {
+	u8 addr[ETH_ALEN];
+};
+
+struct hostapd_acl_params {
+	u8 acl_policy;
+	unsigned int num_mac_acl;
+	struct mac_address mac_acl[0];
 };
 
 enum wpa_driver_if_type {
@@ -958,7 +1020,13 @@ enum wpa_driver_if_type {
 	 * WPA_IF_P2P_GROUP - P2P Group interface (will become either
 	 * WPA_IF_P2P_GO or WPA_IF_P2P_CLIENT, but the role is not yet known)
 	 */
-	WPA_IF_P2P_GROUP
+	WPA_IF_P2P_GROUP,
+
+	/**
+	 * WPA_IF_P2P_DEVICE - P2P Device interface is used to indentify the
+	 * abstracted P2P Device function in the driver
+	 */
+	WPA_IF_P2P_DEVICE
 };
 
 struct wpa_init_params {
@@ -1035,6 +1103,17 @@ enum wnm_oper {
 	WNM_SLEEP_TFS_IE_DEL        /* AP delete the TFS IE */
 };
 
+/* enum chan_width - Channel width definitions */
+enum chan_width {
+	CHAN_WIDTH_20_NOHT,
+	CHAN_WIDTH_20,
+	CHAN_WIDTH_40,
+	CHAN_WIDTH_80,
+	CHAN_WIDTH_80P80,
+	CHAN_WIDTH_160,
+	CHAN_WIDTH_UNKNOWN
+};
+
 /**
  * struct wpa_signal_info - Information about channel signal quality
  */
@@ -1042,8 +1121,12 @@ struct wpa_signal_info {
 	u32 frequency;
 	int above_threshold;
 	int current_signal;
+	int avg_signal;
 	int current_noise;
 	int current_txrate;
+	enum chan_width chanwidth;
+	int center_frq1;
+	int center_frq2;
 };
 
 /**
@@ -1553,6 +1636,16 @@ struct wpa_driver_ops {
 	int (*set_ap)(void *priv, struct wpa_driver_ap_params *params);
 
 	/**
+	 * set_acl - Set ACL in AP mode
+	 * @priv: Private driver interface data
+	 * @params: Parameters to configure ACL
+	 * Returns: 0 on success, -1 on failure
+	 *
+	 * This is used only for the drivers which support MAC address ACL.
+	 */
+	int (*set_acl)(void *priv, struct hostapd_acl_params *params);
+
+	/**
 	 * hapd_init - Initialize driver interface (hostapd only)
 	 * @hapd: Pointer to hostapd context
 	 * @params: Configuration for the driver wrapper
@@ -1961,10 +2054,12 @@ struct wpa_driver_ops {
 	 * @val: 1 = bind to 4-address WDS; 0 = unbind
 	 * @bridge_ifname: Bridge interface to use for the WDS station or %NULL
 	 *	to indicate that bridge is not to be used
+	 * @ifname_wds: Buffer to return the interface name for the new WDS
+	 *	station or %NULL to indicate name is not returned.
 	 * Returns: 0 on success, -1 on failure
 	 */
 	int (*set_wds_sta)(void *priv, const u8 *addr, int aid, int val,
-	                   const char *bridge_ifname);
+	                   const char *bridge_ifname, char *ifname_wds);
 
 	/**
 	 * send_action - Transmit an Action frame
@@ -2612,6 +2707,25 @@ struct wpa_driver_ops {
 	 * avoid frequency conflict in single channel concurrency.
 	 */
 	int (*switch_channel)(void *priv, unsigned int freq);
+
+	/**
+	 * start_dfs_cac - Listen for radar interference on the channel
+	 * @priv: Private driver interface data
+	 * @freq: Frequency (in MHz) of the channel
+	 * Returns: 0 on success, -1 on failure
+	 */
+	int (*start_dfs_cac)(void *priv, int freq);
+
+	/**
+	 * stop_ap - Removes beacon from AP
+	 * @priv: Private driver interface data
+	 * Returns: 0 on success, -1 on failure (or if not supported)
+	 *
+	 * This optional function can be used to disable AP mode related
+	 * configuration. Unlike deinit_ap, it does not change to station
+	 * mode.
+	 */
+	int (*stop_ap)(void *priv);
 };
 
 
@@ -3056,7 +3170,47 @@ enum wpa_event_type {
 	 *
 	 * This event can be used to request a WNM operation to be performed.
 	 */
-	EVENT_WNM
+	EVENT_WNM,
+
+	/**
+	 * EVENT_CONNECT_FAILED_REASON - Connection failure reason in AP mode
+	 *
+	 * This event indicates that the driver reported a connection failure
+	 * with the specified client (for example, max client reached, etc.) in
+	 * AP mode.
+	 */
+	EVENT_CONNECT_FAILED_REASON,
+
+	/**
+	 * EVENT_RADAR_DETECTED - Notify of radar detection
+	 *
+	 * A radar has been detected on the supplied frequency, hostapd should
+	 * react accordingly (e.g., change channel).
+	 */
+	EVENT_DFS_RADAR_DETECTED,
+
+	/**
+	 * EVENT_CAC_FINISHED - Notify that channel availability check has been completed
+	 *
+	 * After a successful CAC, the channel can be marked clear and used.
+	 */
+	EVENT_DFS_CAC_FINISHED,
+
+	/**
+	 * EVENT_CAC_ABORTED - Notify that channel availability check has been aborted
+	 *
+	 * The CAC was not successful, and the channel remains in the previous
+	 * state. This may happen due to a radar beeing detected or other
+	 * external influences.
+	 */
+	EVENT_DFS_CAC_ABORTED,
+
+	/**
+	 * EVENT_DFS_CAC_NOP_FINISHED - Notify that non-occupancy period is over
+	 *
+	 * The channel which was previously unavailable is now available again.
+	 */
+	EVENT_DFS_NOP_FINISHED
 };
 
 
@@ -3681,6 +3835,27 @@ union wpa_event_data {
 		int ht_enabled;
 		int ch_offset;
 	} ch_switch;
+
+	/**
+	 * struct connect_failed - Data for EVENT_CONNECT_FAILED_REASON
+	 * @addr: Remote client address
+	 * @code: Reason code for connection failure
+	 */
+	struct connect_failed_reason {
+		u8 addr[ETH_ALEN];
+		enum {
+			MAX_CLIENT_REACHED,
+			BLOCKED_CLIENT
+		} code;
+	} connect_failed_reason;
+
+	/**
+	 * struct dfs_event - Data for radar detected events
+	 * @freq: Frequency of the channel in MHz
+	 */
+	struct dfs_event {
+		int freq;
+	} dfs_event;
 };
 
 /**

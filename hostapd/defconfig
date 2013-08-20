@@ -128,6 +128,9 @@ CONFIG_EAP_TTLS=y
 # Trusted Network Connect (EAP-TNC)
 #CONFIG_EAP_TNC=y
 
+# EAP-EKE for the integrated EAP server
+#CONFIG_EAP_EKE=y
+
 # PKCS#12 (PFX) support (used to read private key and certificate file from
 # a file that usually has extension .p12 or .pfx)
 CONFIG_PKCS12=y
@@ -278,3 +281,11 @@ CONFIG_IPV6=y
 
 # Enable SQLite database support in hlr_auc_gw, EAP-SIM DB, and eap_user_file
 #CONFIG_SQLITE=y
+
+# Testing options
+# This can be used to enable some testing options (see also the example
+# configuration file) that are really useful only for testing clients that
+# connect to this hostapd. These options allow, for example, to drop a
+# certain percentage of probe requests or auth/(re)assoc frames.
+#
+#CONFIG_TESTING_OPTIONS=y

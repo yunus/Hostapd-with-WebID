@@ -353,7 +353,7 @@ static void sme_send_authentication(struct wpa_supplicant *wpa_s,
 #endif /* CONFIG_P2P */
 
 #ifdef CONFIG_HS20
-	if (wpa_s->conf->hs20) {
+	if (is_hs20_network(wpa_s, ssid, bss)) {
 		struct wpabuf *hs20;
 		hs20 = wpabuf_alloc(20);
 		if (hs20) {
@@ -632,6 +632,10 @@ void sme_associate(struct wpa_supplicant *wpa_s, enum wpas_mode mode,
 	struct ieee80211_ht_capabilities htcaps;
 	struct ieee80211_ht_capabilities htcaps_mask;
 #endif /* CONFIG_HT_OVERRIDES */
+#ifdef CONFIG_VHT_OVERRIDES
+	struct ieee80211_vht_capabilities vhtcaps;
+	struct ieee80211_vht_capabilities vhtcaps_mask;
+#endif /* CONFIG_VHT_OVERRIDES */
 
 	os_memset(&params, 0, sizeof(params));
 	params.bssid = bssid;
@@ -653,6 +657,13 @@ void sme_associate(struct wpa_supplicant *wpa_s, enum wpas_mode mode,
 	params.htcaps_mask = (u8 *) &htcaps_mask;
 	wpa_supplicant_apply_ht_overrides(wpa_s, wpa_s->current_ssid, &params);
 #endif /* CONFIG_HT_OVERRIDES */
+#ifdef CONFIG_VHT_OVERRIDES
+	os_memset(&vhtcaps, 0, sizeof(vhtcaps));
+	os_memset(&vhtcaps_mask, 0, sizeof(vhtcaps_mask));
+	params.vhtcaps = &vhtcaps;
+	params.vhtcaps_mask = &vhtcaps_mask;
+	wpa_supplicant_apply_vht_overrides(wpa_s, wpa_s->current_ssid, &params);
+#endif /* CONFIG_VHT_OVERRIDES */
 #ifdef CONFIG_IEEE80211R
 	if (auth_type == WLAN_AUTH_FT && wpa_s->sme.ft_ies) {
 		params.wpa_ie = wpa_s->sme.ft_ies;
@@ -794,7 +805,7 @@ void sme_event_assoc_timed_out(struct wpa_supplicant *wpa_s,
 
 
 void sme_event_disassoc(struct wpa_supplicant *wpa_s,
-			union wpa_event_data *data)
+			struct disassoc_info *info)
 {
 	wpa_dbg(wpa_s, MSG_DEBUG, "SME: Disassociation event received");
 	if (wpa_s->sme.prev_bssid_set) {
@@ -931,39 +942,6 @@ static void sme_send_2040_bss_coex(struct wpa_supplicant *wpa_s,
 }
 
 
-/**
- * enum wpas_band - Frequency band
- * @WPAS_BAND_2GHZ: 2.4 GHz ISM band
- * @WPAS_BAND_5GHZ: around 5 GHz band (4.9 - 5.7 GHz)
- */
-enum wpas_band {
-	WPAS_BAND_2GHZ,
-	WPAS_BAND_5GHZ,
-	WPAS_BAND_INVALID
-};
-
-/**
- * freq_to_channel - Convert frequency into channel info
- * @channel: Buffer for returning channel number
- * Returns: Band (2 or 5 GHz)
- */
-static enum wpas_band freq_to_channel(int freq, u8 *channel)
-{
-	enum wpas_band band = (freq <= 2484) ? WPAS_BAND_2GHZ : WPAS_BAND_5GHZ;
-	u8 chan = 0;
-
-	if (freq >= 2412 && freq <= 2472)
-		chan = (freq - 2407) / 5;
-	else if (freq == 2484)
-		chan = 14;
-	else if (freq >= 5180 && freq <= 5805)
-		chan = (freq - 5000) / 5;
-
-	*channel = chan;
-	return band;
-}
-
-
 int sme_proc_obss_scan(struct wpa_supplicant *wpa_s)
 {
 	struct wpa_bss *bss;
@@ -1000,7 +978,10 @@ int sme_proc_obss_scan(struct wpa_supplicant *wpa_s)
 
 	dl_list_for_each(bss, &wpa_s->bss, struct wpa_bss, list) {
 		/* Skip other band bss */
-		if (freq_to_channel(bss->freq, &channel) != WPAS_BAND_2GHZ)
+		enum hostapd_hw_mode mode;
+		mode = ieee80211_freq_to_chan(bss->freq, &channel);
+		if (mode != HOSTAPD_MODE_IEEE80211G &&
+		    mode != HOSTAPD_MODE_IEEE80211B)
 			continue;
 
 		ie = wpa_bss_get_ie(bss, WLAN_EID_HT_CAP);
@@ -1258,8 +1239,6 @@ void sme_event_unprot_disconnect(struct wpa_supplicant *wpa_s, const u8 *sa,
 {
 	struct wpa_ssid *ssid;
 
-	if (!(wpa_s->drv_flags & WPA_DRIVER_FLAGS_SME))
-		return;
 	if (wpa_s->wpa_state != WPA_COMPLETED)
 		return;
 	ssid = wpa_s->current_ssid;

@@ -56,6 +56,14 @@ struct wpa_interface {
 	const char *confname;
 
 	/**
+	 * confanother - Additional configuration name (file or profile) name
+	 *
+	 * This can also be %NULL when the additional configuration file is not
+	 * used.
+	 */
+	const char *confanother;
+
+	/**
 	 * ctrl_interface - Control interface parameter
 	 *
 	 * If a configuration file is not used, this variable can be used to
@@ -96,6 +104,15 @@ struct wpa_interface {
 	 * receiving of EAPOL frames from an additional interface.
 	 */
 	const char *bridge_ifname;
+
+	/**
+	 * p2p_mgmt - Interface used for P2P management (P2P Device operations)
+	 *
+	 * Indicates whether wpas_p2p_init() must be called for this interface.
+	 * This is used only when the driver supports a dedicated P2P Device
+	 * interface that is not a network interface.
+	 */
+	int p2p_mgmt;
 };
 
 /**
@@ -145,6 +162,11 @@ struct wpa_params {
 	 * ctrl_interface - Global ctrl_iface path/parameter
 	 */
 	char *ctrl_interface;
+
+	/**
+	 * ctrl_interface_group - Global ctrl_iface group
+	 */
+	char *ctrl_interface_group;
 
 	/**
 	 * dbus_ctrl_interface - Enable the DBus control interface
@@ -228,6 +250,7 @@ struct wpa_global {
 	struct p2p_data *p2p;
 	struct wpa_supplicant *p2p_init_wpa_s;
 	struct wpa_supplicant *p2p_group_formation;
+	struct wpa_supplicant *p2p_invite_group;
 	u8 p2p_dev_addr[ETH_ALEN];
 	struct dl_list p2p_srv_bonjour; /* struct p2p_srv_bonjour */
 	struct dl_list p2p_srv_upnp; /* struct p2p_srv_upnp */
@@ -306,6 +329,7 @@ struct wpa_supplicant {
 	char bridge_ifname[16];
 
 	char *confname;
+	char *confanother;
 	struct wpa_config *conf;
 	int countermeasures;
 	os_time_t last_michael_mic_error;
@@ -337,6 +361,8 @@ struct wpa_supplicant {
 	size_t disallow_aps_bssid_count;
 	struct wpa_ssid_value *disallow_aps_ssid;
 	size_t disallow_aps_ssid_count;
+
+	enum { WPA_SETBAND_AUTO, WPA_SETBAND_5G, WPA_SETBAND_2G } setband;
 
 	/* previous scan was wildcard when interleaving between
 	 * wildcard scans and specific SSID scan when max_ssids=1 */
@@ -390,10 +416,8 @@ struct wpa_supplicant {
 			     * previous association event */
 
 	struct scard_data *scard;
-#ifdef PCSC_FUNCS
 	char imsi[20];
 	int mnc_len;
-#endif /* PCSC_FUNCS */
 
 	unsigned char last_eapol_src[ETH_ALEN];
 
@@ -443,6 +467,7 @@ struct wpa_supplicant {
 		 */
 		MANUAL_SCAN_REQ
 	} scan_req;
+	struct os_time scan_trigger_time;
 	int scan_runs; /* number of scan runs since WPS was started */
 	int *next_scan_freqs;
 	int scan_interval; /* time in sec between scans to find suitable AP */
@@ -458,6 +483,10 @@ struct wpa_supplicant {
 	 * struct wpa_driver_capa in driver.h
 	 */
 	unsigned int probe_resp_offloads;
+
+	/* extended capabilities supported by the driver */
+	const u8 *extended_capa, *extended_capa_mask;
+	unsigned int extended_capa_len;
 
 	int max_scan_ssids;
 	int max_sched_scan_ssids;
@@ -545,6 +574,8 @@ struct wpa_supplicant {
 					    result);
 	unsigned int roc_waiting_drv_freq;
 	int action_tx_wait_time;
+
+	int p2p_mgmt;
 
 #ifdef CONFIG_P2P
 	struct p2p_go_neg_results *go_params;
@@ -653,6 +684,7 @@ struct wpa_supplicant {
 	unsigned int auto_select:1;
 	unsigned int auto_network_select:1;
 	unsigned int fetch_all_anqp:1;
+	struct wpa_bss *interworking_gas_bss;
 #endif /* CONFIG_INTERWORKING */
 	unsigned int drv_capa_known;
 
@@ -674,6 +706,24 @@ struct wpa_supplicant {
 	u8 last_gas_dialog_token;
 
 	unsigned int no_keep_alive:1;
+
+#ifdef CONFIG_WNM
+	u8 wnm_dialog_token;
+	u8 wnm_reply;
+	u8 wnm_num_neighbor_report;
+	u8 wnm_mode;
+	u16 wnm_dissoc_timer;
+	u8 wnm_validity_interval;
+	u8 wnm_bss_termination_duration[12];
+	struct neighbor_report *wnm_neighbor_report_elements;
+#endif /* CONFIG_WNM */
+
+#ifdef CONFIG_TESTING_GET_GTK
+	u8 last_gtk[32];
+	size_t last_gtk_len;
+#endif /* CONFIG_TESTING_GET_GTK */
+
+	unsigned int num_multichan_concurrent;
 };
 
 
@@ -681,8 +731,13 @@ struct wpa_supplicant {
 void wpa_supplicant_apply_ht_overrides(
 	struct wpa_supplicant *wpa_s, struct wpa_ssid *ssid,
 	struct wpa_driver_associate_params *params);
+void wpa_supplicant_apply_vht_overrides(
+	struct wpa_supplicant *wpa_s, struct wpa_ssid *ssid,
+	struct wpa_driver_associate_params *params);
 
 int wpa_set_wep_keys(struct wpa_supplicant *wpa_s, struct wpa_ssid *ssid);
+int wpa_supplicant_set_wpa_none_key(struct wpa_supplicant *wpa_s,
+				    struct wpa_ssid *ssid);
 
 int wpa_supplicant_reload_configuration(struct wpa_supplicant *wpa_s);
 
@@ -761,6 +816,7 @@ int disallowed_ssid(struct wpa_supplicant *wpa_s, const u8 *ssid,
 		    size_t ssid_len);
 void wpas_request_connection(struct wpa_supplicant *wpa_s);
 int wpas_build_ext_capab(struct wpa_supplicant *wpa_s, u8 *buf);
+int wpas_wpa_is_in_progress(struct wpa_supplicant *wpa_s);
 
 /**
  * wpa_supplicant_ctrl_iface_ctrl_rsp_handle - Handle a control response
@@ -786,6 +842,8 @@ void wpa_supplicant_stop_countermeasures(void *eloop_ctx, void *sock_ctx);
 void wpa_supplicant_delayed_mic_error_report(void *eloop_ctx, void *sock_ctx);
 void wnm_bss_keep_alive_deinit(struct wpa_supplicant *wpa_s);
 int wpa_supplicant_fast_associate(struct wpa_supplicant *wpa_s);
+struct wpa_bss * wpa_supplicant_pick_network(struct wpa_supplicant *wpa_s,
+					     struct wpa_ssid **selected_ssid);
 
 /* eap_register.c */
 int eap_register_methods(void);
@@ -803,5 +861,8 @@ static inline int network_is_persistent_group(struct wpa_ssid *ssid)
 int wpas_network_disabled(struct wpa_supplicant *wpa_s, struct wpa_ssid *ssid);
 
 int wpas_init_ext_pw(struct wpa_supplicant *wpa_s);
+
+int get_shared_radio_freqs(struct wpa_supplicant *wpa_s,
+			   int *freq_array, unsigned int len);
 
 #endif /* WPA_SUPPLICANT_I_H */

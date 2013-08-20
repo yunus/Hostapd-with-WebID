@@ -83,7 +83,7 @@ static int hostapd_config_read_vlan_file(struct hostapd_bss_config *bss,
 			return -1;
 		}
 
-		vlan = os_malloc(sizeof(*vlan));
+		vlan = os_zalloc(sizeof(*vlan));
 		if (vlan == NULL) {
 			wpa_printf(MSG_ERROR, "Out of memory while reading "
 				   "VLAN interfaces from '%s'", fname);
@@ -91,14 +91,10 @@ static int hostapd_config_read_vlan_file(struct hostapd_bss_config *bss,
 			return -1;
 		}
 
-		os_memset(vlan, 0, sizeof(*vlan));
 		vlan->vlan_id = vlan_id;
 		os_strlcpy(vlan->ifname, pos, sizeof(vlan->ifname));
-		if (bss->vlan_tail)
-			bss->vlan_tail->next = vlan;
-		else
-			bss->vlan = vlan;
-		bss->vlan_tail = vlan;
+		vlan->next = bss->vlan;
+		bss->vlan = vlan;
 	}
 
 	fclose(f);
@@ -711,14 +707,14 @@ static int hostapd_config_read_wep(struct hostapd_wep_keys *wep, int keyidx,
 }
 
 
-static int hostapd_parse_rates(int **rate_list, char *val)
+static int hostapd_parse_intlist(int **int_list, char *val)
 {
 	int *list;
 	int count;
 	char *pos, *end;
 
-	os_free(*rate_list);
-	*rate_list = NULL;
+	os_free(*int_list);
+	*int_list = NULL;
 
 	pos = val;
 	count = 0;
@@ -745,7 +741,7 @@ static int hostapd_parse_rates(int **rate_list, char *val)
 	}
 	list[count] = -1;
 
-	*rate_list = list;
+	*int_list = list;
 	return 0;
 }
 
@@ -1224,6 +1220,12 @@ static int hostapd_config_check(struct hostapd_config *conf)
 		return -1;
 	}
 
+	if (conf->ieee80211h && !conf->ieee80211d) {
+		wpa_printf(MSG_ERROR, "Cannot enable IEEE 802.11h without "
+			   "IEEE 802.11d enabled");
+		return -1;
+	}
+
 	for (i = 0; i < conf->num_bss; i++) {
 		if (hostapd_config_check_bss(&conf->bss[i], conf))
 			return -1;
@@ -1684,6 +1686,9 @@ static int hostapd_config_fill(struct hostapd_config *conf,
 				   sizeof(conf->bss[0].iface));
 		} else if (os_strcmp(buf, "bridge") == 0) {
 			os_strlcpy(bss->bridge, pos, sizeof(bss->bridge));
+		} else if (os_strcmp(buf, "vlan_bridge") == 0) {
+			os_strlcpy(bss->vlan_bridge, pos,
+			           sizeof(bss->vlan_bridge));
 		} else if (os_strcmp(buf, "wds_bridge") == 0) {
 			os_strlcpy(bss->wds_bridge, pos,
 				   sizeof(bss->wds_bridge));
@@ -1773,6 +1778,8 @@ static int hostapd_config_fill(struct hostapd_config *conf,
 			}
 		} else if (os_strcmp(buf, "wds_sta") == 0) {
 			bss->wds_sta = atoi(pos);
+		} else if (os_strcmp(buf, "start_disabled") == 0) {
+			bss->start_disabled = atoi(pos);
 		} else if (os_strcmp(buf, "ap_isolate") == 0) {
 			bss->isolate = atoi(pos);
 		} else if (os_strcmp(buf, "ap_max_inactivity") == 0) {
@@ -1785,6 +1792,8 @@ static int hostapd_config_fill(struct hostapd_config *conf,
 			conf->country[2] = ' ';
 		} else if (os_strcmp(buf, "ieee80211d") == 0) {
 			conf->ieee80211d = atoi(pos);
+		} else if (os_strcmp(buf, "ieee80211h") == 0) {
+			conf->ieee80211h = atoi(pos);
 		} else if (os_strcmp(buf, "ieee8021x") == 0) {
 			bss->ieee802_1x = atoi(pos);
 		} else if (os_strcmp(buf, "eapol_version") == 0) {
@@ -1829,6 +1838,9 @@ static int hostapd_config_fill(struct hostapd_config *conf,
 			bss->webid_method = os_strdup(pos);
 		} else if (os_strcmp(buf, "check_crl") == 0) {
 			bss->check_crl = atoi(pos);
+		} else if (os_strcmp(buf, "ocsp_stapling_response") == 0) {
+			os_free(bss->ocsp_stapling_response);
+			bss->ocsp_stapling_response = os_strdup(pos);
 		} else if (os_strcmp(buf, "dh_file") == 0) {
 			os_free(bss->dh_file);
 			bss->dh_file = os_strdup(pos);
@@ -2355,13 +2367,14 @@ static int hostapd_config_fill(struct hostapd_config *conf,
 			} else
 				conf->send_probe_response = val;
 		} else if (os_strcmp(buf, "supported_rates") == 0) {
-			if (hostapd_parse_rates(&conf->supported_rates, pos)) {
+			if (hostapd_parse_intlist(&conf->supported_rates, pos))
+			{
 				wpa_printf(MSG_ERROR, "Line %d: invalid rate "
 					   "list", line);
 				errors++;
 			}
 		} else if (os_strcmp(buf, "basic_rates") == 0) {
-			if (hostapd_parse_rates(&conf->basic_rates, pos)) {
+			if (hostapd_parse_intlist(&conf->basic_rates, pos)) {
 				wpa_printf(MSG_ERROR, "Line %d: invalid rate "
 					   "list", line);
 				errors++;
@@ -2515,6 +2528,8 @@ static int hostapd_config_fill(struct hostapd_config *conf,
 					   "wps_state", line);
 				errors++;
 			}
+		} else if (os_strcmp(buf, "wps_independent") == 0) {
+			bss->wps_independent = atoi(pos);
 		} else if (os_strcmp(buf, "ap_setup_locked") == 0) {
 			bss->ap_setup_locked = atoi(pos);
 		} else if (os_strcmp(buf, "uuid") == 0) {
@@ -2624,6 +2639,9 @@ static int hostapd_config_fill(struct hostapd_config *conf,
 			bss->upc = os_strdup(pos);
 		} else if (os_strcmp(buf, "pbc_in_m1") == 0) {
 			bss->pbc_in_m1 = atoi(pos);
+		} else if (os_strcmp(buf, "server_id") == 0) {
+			os_free(bss->server_id);
+			bss->server_id = os_strdup(pos);
 #ifdef CONFIG_WPS_NFC
 		} else if (os_strcmp(buf, "wps_nfc_dev_pw_id") == 0) {
 			bss->wps_nfc_dev_pw_id = atoi(pos);
@@ -2633,15 +2651,19 @@ static int hostapd_config_fill(struct hostapd_config *conf,
 					   "wps_nfc_dev_pw_id value", line);
 				errors++;
 			}
+			bss->wps_nfc_pw_from_config = 1;
 		} else if (os_strcmp(buf, "wps_nfc_dh_pubkey") == 0) {
 			wpabuf_free(bss->wps_nfc_dh_pubkey);
 			bss->wps_nfc_dh_pubkey = hostapd_parse_bin(pos);
+			bss->wps_nfc_pw_from_config = 1;
 		} else if (os_strcmp(buf, "wps_nfc_dh_privkey") == 0) {
 			wpabuf_free(bss->wps_nfc_dh_privkey);
 			bss->wps_nfc_dh_privkey = hostapd_parse_bin(pos);
+			bss->wps_nfc_pw_from_config = 1;
 		} else if (os_strcmp(buf, "wps_nfc_dev_pw") == 0) {
 			wpabuf_free(bss->wps_nfc_dev_pw);
 			bss->wps_nfc_dev_pw = hostapd_parse_bin(pos);
+			bss->wps_nfc_pw_from_config = 1;
 #endif /* CONFIG_WPS_NFC */
 #endif /* CONFIG_WPS */
 #ifdef CONFIG_P2P_MANAGER
@@ -2876,6 +2898,26 @@ static int hostapd_config_fill(struct hostapd_config *conf,
 			bss->hs20_operating_class = oper_class;
 			bss->hs20_operating_class_len = oper_class_len;
 #endif /* CONFIG_HS20 */
+#ifdef CONFIG_TESTING_OPTIONS
+#define PARSE_TEST_PROBABILITY(_val)					\
+		} else if (os_strcmp(buf, #_val) == 0) {		\
+			char *end;					\
+									\
+			conf->_val = strtod(pos, &end);			\
+			if (*end || conf->_val < 0.0d ||		\
+			    conf->_val > 1.0d) {			\
+				wpa_printf(MSG_ERROR,			\
+					   "Line %d: Invalid value '%s'", \
+					   line, pos);			\
+				errors++;				\
+				return errors;				\
+			}
+		PARSE_TEST_PROBABILITY(ignore_probe_probability)
+		PARSE_TEST_PROBABILITY(ignore_auth_probability)
+		PARSE_TEST_PROBABILITY(ignore_assoc_probability)
+		PARSE_TEST_PROBABILITY(ignore_reassoc_probability)
+		PARSE_TEST_PROBABILITY(corrupt_gtk_rekey_mic_probability)
+#endif /* CONFIG_TESTING_OPTIONS */
 		} else if (os_strcmp(buf, "vendor_elements") == 0) {
 			struct wpabuf *elems;
 			size_t len = os_strlen(pos);
@@ -2907,7 +2949,7 @@ static int hostapd_config_fill(struct hostapd_config *conf,
 		} else if (os_strcmp(buf, "sae_anti_clogging_threshold") == 0) {
 			bss->sae_anti_clogging_threshold = atoi(pos);
 		} else if (os_strcmp(buf, "sae_groups") == 0) {
-			if (hostapd_parse_rates(&bss->sae_groups, pos)) {
+			if (hostapd_parse_intlist(&bss->sae_groups, pos)) {
 				wpa_printf(MSG_ERROR, "Line %d: Invalid "
 					   "sae_groups value '%s'", line, pos);
 				return 1;

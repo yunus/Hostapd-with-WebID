@@ -224,10 +224,27 @@ struct wpa_bss * wpa_bss_get(struct wpa_supplicant *wpa_s, const u8 *bssid,
 }
 
 
-static void wpa_bss_copy_res(struct wpa_bss *dst, struct wpa_scan_res *src)
+static void calculate_update_time(const struct os_time *fetch_time,
+				  unsigned int age_ms,
+				  struct os_time *update_time)
 {
 	os_time_t usec;
 
+	update_time->sec = fetch_time->sec;
+	update_time->usec = fetch_time->usec;
+	update_time->sec -= age_ms / 1000;
+	usec = (age_ms % 1000) * 1000;
+	if (update_time->usec < usec) {
+		update_time->sec--;
+		update_time->usec += 1000000;
+	}
+	update_time->usec -= usec;
+}
+
+
+static void wpa_bss_copy_res(struct wpa_bss *dst, struct wpa_scan_res *src,
+			     struct os_time *fetch_time)
+{
 	dst->flags = src->flags;
 	os_memcpy(dst->bssid, src->bssid, ETH_ALEN);
 	dst->freq = src->freq;
@@ -238,14 +255,7 @@ static void wpa_bss_copy_res(struct wpa_bss *dst, struct wpa_scan_res *src)
 	dst->level = src->level;
 	dst->tsf = src->tsf;
 
-	os_get_time(&dst->last_update);
-	dst->last_update.sec -= src->age / 1000;
-	usec = (src->age % 1000) * 1000;
-	if (dst->last_update.usec < usec) {
-		dst->last_update.sec--;
-		dst->last_update.usec += 1000000;
-	}
-	dst->last_update.usec -= usec;
+	calculate_update_time(fetch_time, src->age, &dst->last_update);
 }
 
 
@@ -315,7 +325,8 @@ static int wpa_bss_remove_oldest(struct wpa_supplicant *wpa_s)
 
 static struct wpa_bss * wpa_bss_add(struct wpa_supplicant *wpa_s,
 				    const u8 *ssid, size_t ssid_len,
-				    struct wpa_scan_res *res)
+				    struct wpa_scan_res *res,
+				    struct os_time *fetch_time)
 {
 	struct wpa_bss *bss;
 
@@ -324,7 +335,7 @@ static struct wpa_bss * wpa_bss_add(struct wpa_supplicant *wpa_s,
 		return NULL;
 	bss->id = wpa_s->bss_next_id++;
 	bss->last_update_idx = wpa_s->bss_update_idx;
-	wpa_bss_copy_res(bss, res);
+	wpa_bss_copy_res(bss, res, fetch_time);
 	os_memcpy(bss->ssid, ssid, ssid_len);
 	bss->ssid_len = ssid_len;
 	bss->ie_len = res->ie_len;
@@ -480,14 +491,14 @@ static void notify_bss_changes(struct wpa_supplicant *wpa_s, u32 changes,
 
 static struct wpa_bss *
 wpa_bss_update(struct wpa_supplicant *wpa_s, struct wpa_bss *bss,
-	       struct wpa_scan_res *res)
+	       struct wpa_scan_res *res, struct os_time *fetch_time)
 {
 	u32 changes;
 
 	changes = wpa_bss_compare_res(bss, res);
 	bss->scan_miss_count = 0;
 	bss->last_update_idx = wpa_s->bss_update_idx;
-	wpa_bss_copy_res(bss, res);
+	wpa_bss_copy_res(bss, res, fetch_time);
 	/* Move the entry to the end of the list */
 	dl_list_del(&bss->list);
 	if (bss->ie_len + bss->beacon_ie_len >=
@@ -551,16 +562,33 @@ void wpa_bss_update_start(struct wpa_supplicant *wpa_s)
  * wpa_bss_update_scan_res - Update a BSS table entry based on a scan result
  * @wpa_s: Pointer to wpa_supplicant data
  * @res: Scan result
+ * @fetch_time: Time when the result was fetched from the driver
  *
  * This function updates a BSS table entry (or adds one) based on a scan result.
  * This is called separately for each scan result between the calls to
  * wpa_bss_update_start() and wpa_bss_update_end().
  */
 void wpa_bss_update_scan_res(struct wpa_supplicant *wpa_s,
-			     struct wpa_scan_res *res)
+			     struct wpa_scan_res *res,
+			     struct os_time *fetch_time)
 {
 	const u8 *ssid, *p2p;
 	struct wpa_bss *bss;
+
+	if (wpa_s->conf->ignore_old_scan_res) {
+		struct os_time update;
+		calculate_update_time(fetch_time, res->age, &update);
+		if (os_time_before(&update, &wpa_s->scan_trigger_time)) {
+			struct os_time age;
+			os_time_sub(&wpa_s->scan_trigger_time, &update, &age);
+			wpa_dbg(wpa_s, MSG_DEBUG, "BSS: Ignore driver BSS "
+				"table entry that is %u.%06u seconds older "
+				"than our scan trigger",
+				(unsigned int) age.sec,
+				(unsigned int) age.usec);
+			return;
+		}
+	}
 
 	ssid = wpa_scan_get_ie(res, WLAN_EID_SSID);
 	if (ssid == NULL) {
@@ -595,9 +623,9 @@ void wpa_bss_update_scan_res(struct wpa_supplicant *wpa_s,
 	 * (to save memory) */
 	bss = wpa_bss_get(wpa_s, res->bssid, ssid + 2, ssid[1]);
 	if (bss == NULL)
-		bss = wpa_bss_add(wpa_s, ssid + 2, ssid[1], res);
+		bss = wpa_bss_add(wpa_s, ssid + 2, ssid[1], res, fetch_time);
 	else
-		bss = wpa_bss_update(wpa_s, bss, res);
+		bss = wpa_bss_update(wpa_s, bss, res, fetch_time);
 
 	if (bss == NULL)
 		return;
@@ -824,6 +852,34 @@ struct wpa_bss * wpa_bss_get_bssid(struct wpa_supplicant *wpa_s,
 }
 
 
+/**
+ * wpa_bss_get_bssid_latest - Fetch the latest BSS table entry based on BSSID
+ * @wpa_s: Pointer to wpa_supplicant data
+ * @bssid: BSSID
+ * Returns: Pointer to the BSS entry or %NULL if not found
+ *
+ * This function is like wpa_bss_get_bssid(), but full BSS table is iterated to
+ * find the entry that has the most recent update. This can help in finding the
+ * correct entry in cases where the SSID of the AP may have changed recently
+ * (e.g., in WPS reconfiguration cases).
+ */
+struct wpa_bss * wpa_bss_get_bssid_latest(struct wpa_supplicant *wpa_s,
+					  const u8 *bssid)
+{
+	struct wpa_bss *bss, *found = NULL;
+	if (!wpa_supplicant_filter_bssid_match(wpa_s, bssid))
+		return NULL;
+	dl_list_for_each_reverse(bss, &wpa_s->bss, struct wpa_bss, list) {
+		if (os_memcmp(bss->bssid, bssid, ETH_ALEN) != 0)
+			continue;
+		if (found == NULL ||
+		    os_time_before(&found->last_update, &bss->last_update))
+			found = bss;
+	}
+	return found;
+}
+
+
 #ifdef CONFIG_P2P
 /**
  * wpa_bss_get_p2p_dev_addr - Fetch a BSS table entry based on P2P Device Addr
@@ -858,6 +914,29 @@ struct wpa_bss * wpa_bss_get_id(struct wpa_supplicant *wpa_s, unsigned int id)
 	struct wpa_bss *bss;
 	dl_list_for_each(bss, &wpa_s->bss, struct wpa_bss, list) {
 		if (bss->id == id)
+			return bss;
+	}
+	return NULL;
+}
+
+
+/**
+ * wpa_bss_get_id_range - Fetch a BSS table entry based on identifier range
+ * @wpa_s: Pointer to wpa_supplicant data
+ * @idf: Smallest allowed identifier assigned for the entry
+ * @idf: Largest allowed identifier assigned for the entry
+ * Returns: Pointer to the BSS entry or %NULL if not found
+ *
+ * This function is similar to wpa_bss_get_id() but allows a BSS entry with the
+ * smallest id value to be fetched within the specified range without the
+ * caller having to know the exact id.
+ */
+struct wpa_bss * wpa_bss_get_id_range(struct wpa_supplicant *wpa_s,
+				      unsigned int idf, unsigned int idl)
+{
+	struct wpa_bss *bss;
+	dl_list_for_each(bss, &wpa_s->bss_id, struct wpa_bss, list_id) {
+		if (bss->id >= idf && bss->id <= idl)
 			return bss;
 	}
 	return NULL;

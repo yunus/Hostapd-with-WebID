@@ -470,6 +470,29 @@ static int hostapd_cli_cmd_wps_nfc_token(struct wpa_ctrl *ctrl,
 	}
 	return wpa_ctrl_command(ctrl, cmd);
 }
+
+
+static int hostapd_cli_cmd_nfc_get_handover_sel(struct wpa_ctrl *ctrl,
+						int argc, char *argv[])
+{
+	char cmd[64];
+	int res;
+
+	if (argc != 2) {
+		printf("Invalid 'nfc_get_handover_sel' command - two arguments "
+		       "are required.\n");
+		return -1;
+	}
+
+	res = os_snprintf(cmd, sizeof(cmd), "NFC_GET_HANDOVER_SEL %s %s",
+			  argv[0], argv[1]);
+	if (res < 0 || (size_t) res >= sizeof(cmd) - 1) {
+		printf("Too long NFC_GET_HANDOVER_SEL command.\n");
+		return -1;
+	}
+	return wpa_ctrl_command(ctrl, cmd);
+}
+
 #endif /* CONFIG_WPS_NFC */
 
 
@@ -565,14 +588,14 @@ static int hostapd_cli_cmd_ess_disassoc(struct wpa_ctrl *ctrl, int argc,
 	char buf[300];
 	int res;
 
-	if (argc < 2) {
-		printf("Invalid 'ess_disassoc' command - two arguments (STA "
-		       "addr and URL) are needed\n");
+	if (argc < 3) {
+		printf("Invalid 'ess_disassoc' command - three arguments (STA "
+		       "addr, disassoc timer, and URL) are needed\n");
 		return -1;
 	}
 
-	res = os_snprintf(buf, sizeof(buf), "ESS_DISASSOC %s %s",
-			  argv[0], argv[1]);
+	res = os_snprintf(buf, sizeof(buf), "ESS_DISASSOC %s %s %s",
+			  argv[0], argv[1], argv[2]);
 	if (res < 0 || res >= (int) sizeof(buf))
 		return -1;
 	return wpa_ctrl_command(ctrl, buf);
@@ -791,6 +814,7 @@ static struct hostapd_cli_cmd hostapd_cli_commands[] = {
 	{ "wps_nfc_tag_read", hostapd_cli_cmd_wps_nfc_tag_read },
 	{ "wps_nfc_config_token", hostapd_cli_cmd_wps_nfc_config_token },
 	{ "wps_nfc_token", hostapd_cli_cmd_wps_nfc_token },
+	{ "nfc_get_handover_sel", hostapd_cli_cmd_nfc_get_handover_sel },
 #endif /* CONFIG_WPS_NFC */
 	{ "wps_ap_pin", hostapd_cli_cmd_wps_ap_pin },
 	{ "wps_config", hostapd_cli_cmd_wps_config },

@@ -15,6 +15,7 @@ int wpa_supplicant_delayed_sched_scan(struct wpa_supplicant *wpa_s,
 				      int sec, int usec);
 int wpa_supplicant_req_sched_scan(struct wpa_supplicant *wpa_s);
 void wpa_supplicant_cancel_scan(struct wpa_supplicant *wpa_s);
+void wpa_supplicant_cancel_delayed_sched_scan(struct wpa_supplicant *wpa_s);
 void wpa_supplicant_cancel_sched_scan(struct wpa_supplicant *wpa_s);
 void wpa_supplicant_notify_scanning(struct wpa_supplicant *wpa_s,
 				    int scanning);
@@ -33,5 +34,8 @@ struct wpabuf * wpa_scan_get_vendor_ie_multi(const struct wpa_scan_res *res,
 int wpa_supplicant_filter_bssid_match(struct wpa_supplicant *wpa_s,
 				      const u8 *bssid);
 void wpa_supplicant_update_scan_int(struct wpa_supplicant *wpa_s, int sec);
+void scan_only_handler(struct wpa_supplicant *wpa_s,
+		       struct wpa_scan_results *scan_res);
+int wpas_scan_scheduled(struct wpa_supplicant *wpa_s);
 
 #endif /* SCAN_H */

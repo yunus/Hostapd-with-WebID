@@ -74,8 +74,6 @@ struct hostapd_ssid {
 #ifdef CONFIG_FULL_DYNAMIC_VLAN
 	char *vlan_tagged_interface;
 #endif /* CONFIG_FULL_DYNAMIC_VLAN */
-	struct hostapd_wep_keys **dyn_vlan_keys;
-	size_t max_dyn_vlan_keys;
 };
 
 
@@ -180,6 +178,7 @@ struct hostapd_nai_realm_data {
 struct hostapd_bss_config {
 	char iface[IFNAMSIZ + 1];
 	char bridge[IFNAMSIZ + 1];
+	char vlan_bridge[IFNAMSIZ + 1];
 	char wds_bridge[IFNAMSIZ + 1];
 
 	enum hostapd_logger_level logger_syslog_level, logger_stdout_level;
@@ -242,6 +241,7 @@ struct hostapd_bss_config {
 	int num_deny_mac;
 	int wds_sta;
 	int isolate;
+	int start_disabled;
 
 	int auth_algs; /* bitfield of allowed IEEE 802.11 authentication
 			* algorithms, WPA_AUTH_ALG_{OPEN,SHARED,LEAP} */
@@ -296,6 +296,7 @@ struct hostapd_bss_config {
 	char *server_webid;
 	char *webid_method;
 	int check_crl;
+	char *ocsp_stapling_response;
 	char *dh_file;
 	u8 *pac_opaque_encr_key;
 	u8 *eap_fast_a_id;
@@ -326,7 +327,7 @@ struct hostapd_bss_config {
 	int wmm_enabled;
 	int wmm_uapsd;
 
-	struct hostapd_vlan *vlan, *vlan_tail;
+	struct hostapd_vlan *vlan;
 
 	macaddr bssid;
 
@@ -342,6 +343,7 @@ struct hostapd_bss_config {
 
 	int wps_state;
 #ifdef CONFIG_WPS
+	int wps_independent;
 	int ap_setup_locked;
 	u8 uuid[16];
 	char *wps_pin_requests;
@@ -367,12 +369,14 @@ struct hostapd_bss_config {
 	char *model_url;
 	char *upc;
 	struct wpabuf *wps_vendor_ext[MAX_WPS_VENDOR_EXTENSIONS];
+	int wps_nfc_pw_from_config;
 	int wps_nfc_dev_pw_id;
 	struct wpabuf *wps_nfc_dh_pubkey;
 	struct wpabuf *wps_nfc_dh_privkey;
 	struct wpabuf *wps_nfc_dev_pw;
 #endif /* CONFIG_WPS */
 	int pbc_in_m1;
+	char *server_id;
 
 #define P2P_ENABLED BIT(0)
 #define P2P_GROUP_OWNER BIT(1)
@@ -498,6 +502,8 @@ struct hostapd_config {
 
 	int ieee80211d;
 
+	int ieee80211h; /* DFS */
+
 	struct hostapd_tx_queue_params tx_queue[NUM_TX_QUEUES];
 
 	/*
@@ -520,6 +526,14 @@ struct hostapd_config {
 	u8 vht_oper_chwidth;
 	u8 vht_oper_centr_freq_seg0_idx;
 	u8 vht_oper_centr_freq_seg1_idx;
+
+#ifdef CONFIG_TESTING_OPTIONS
+	double ignore_probe_probability;
+	double ignore_auth_probability;
+	double ignore_assoc_probability;
+	double ignore_reassoc_probability;
+	double corrupt_gtk_rekey_mic_probability;
+#endif /* CONFIG_TESTING_OPTIONS */
 };
 
 
@@ -536,6 +550,7 @@ int hostapd_wep_key_cmp(struct hostapd_wep_keys *a,
 const u8 * hostapd_get_psk(const struct hostapd_bss_config *conf,
 			   const u8 *addr, const u8 *prev_psk);
 int hostapd_setup_wpa_psk(struct hostapd_bss_config *conf);
+int hostapd_vlan_id_valid(struct hostapd_vlan *vlan, int vlan_id);
 const char * hostapd_get_vlan_id_ifname(struct hostapd_vlan *vlan,
 					int vlan_id);
 struct hostapd_radius_attr *

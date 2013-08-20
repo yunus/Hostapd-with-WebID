@@ -24,6 +24,7 @@
 #define DEFAULT_BSS_EXPIRATION_SCAN_COUNT 2
 #define DEFAULT_MAX_NUM_STA 128
 #define DEFAULT_ACCESS_NETWORK_TYPE 15
+#define DEFAULT_SCAN_CUR_FREQ 0
 
 #include "config_ssid.h"
 #include "wps/wps.h"
@@ -220,6 +221,7 @@ struct wpa_cred {
 #define CFG_CHANGED_P2P_OPER_CHANNEL BIT(12)
 #define CFG_CHANGED_P2P_PREF_CHAN BIT(13)
 #define CFG_CHANGED_EXT_PW_BACKEND BIT(14)
+#define CFG_CHANGED_NFC_PASSWORD_TOKEN BIT(15)
 
 /**
  * struct wpa_config - wpa_supplicant configuration data
@@ -570,6 +572,7 @@ struct wpa_config {
 	int p2p_intra_bss;
 	unsigned int num_p2p_pref_chan;
 	struct p2p_channel *p2p_pref_chan;
+	int p2p_ignore_shared_freq;
 
 	struct wpabuf *wps_vendor_ext_m1;
 
@@ -643,6 +646,22 @@ struct wpa_config {
 	unsigned int max_num_sta;
 
 	/**
+	 * freq_list - Array of allowed scan frequencies or %NULL for all
+	 *
+	 * This is an optional zero-terminated array of frequencies in
+	 * megahertz (MHz) to allow for narrowing scanning range.
+	 */
+	int *freq_list;
+
+	/**
+	 * scan_cur_freq - Whether to scan only the current channel
+	 *
+	 * If true, attempt to scan only the current channel if any other
+	 * VIFs on this radio are already associated on a particular channel.
+	 */
+	int scan_cur_freq;
+
+	/**
 	 * changed_parameters - Bitmap of changed parameters since last update
 	 */
 	unsigned int changed_parameters;
@@ -704,6 +723,15 @@ struct wpa_config {
 	 * <autoscan module name>:<module parameters>
 	 */
 	char *autoscan;
+
+	/**
+	 * wps_nfc_pw_from_config - NFC Device Password was read from config
+	 *
+	 * This parameter can be determined whether the NFC Device Password was
+	 * included in the configuration (1) or generated dynamically (0). Only
+	 * the former case is re-written back to the configuration file.
+	 */
+	int wps_nfc_pw_from_config;
 
 	/**
 	 * wps_nfc_dev_pw_id - NFC Device Password ID for password token
@@ -807,6 +835,47 @@ struct wpa_config {
 	 * groups will be tried in the indicated order.
 	 */
 	int *sae_groups;
+
+	/**
+	 * dtim_period - Default DTIM period in Beacon intervals
+	 *
+	 * This parameter can be used to set the default value for network
+	 * blocks that do not specify dtim_period.
+	 */
+	int dtim_period;
+
+	/**
+	 * beacon_int - Default Beacon interval in TU
+	 *
+	 * This parameter can be used to set the default value for network
+	 * blocks that do not specify beacon_int.
+	 */
+	int beacon_int;
+
+	/**
+	 * ap_vendor_elements: Vendor specific elements for Beacon/ProbeResp
+	 *
+	 * This parameter can be used to define additional vendor specific
+	 * elements for Beacon and Probe Response frames in AP/P2P GO mode. The
+	 * format for these element(s) is a hexdump of the raw information
+	 * elements (id+len+payload for one or more elements).
+	 */
+	struct wpabuf *ap_vendor_elements;
+
+	/**
+	 * ignore_old_scan_res - Ignore scan results older than request
+	 *
+	 * The driver may have a cache of scan results that makes it return
+	 * information that is older than our scan trigger. This parameter can
+	 * be used to configure such old information to be ignored instead of
+	 * allowing it to update the internal BSS table.
+	 */
+	int ignore_old_scan_res;
+
+	/**
+	 * sched_scan_interval -  schedule scan interval
+	 */
+	unsigned int sched_scan_interval;
 };
 
 
@@ -865,6 +934,7 @@ int wpa_config_process_global(struct wpa_config *config, char *pos, int line);
  * wpa_config_read - Read and parse configuration database
  * @name: Name of the configuration (e.g., path and file name for the
  * configuration file)
+ * @cfgp: Pointer to previously allocated configuration data or %NULL if none
  * Returns: Pointer to allocated configuration data or %NULL on failure
  *
  * This function reads configuration data, parses its contents, and allocates
@@ -873,7 +943,7 @@ int wpa_config_process_global(struct wpa_config *config, char *pos, int line);
  *
  * Each configuration backend needs to implement this function.
  */
-struct wpa_config * wpa_config_read(const char *name);
+struct wpa_config * wpa_config_read(const char *name, struct wpa_config *cfgp);
 
 /**
  * wpa_config_write - Write or update configuration data

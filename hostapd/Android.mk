@@ -39,7 +39,10 @@ INCLUDES = $(LOCAL_PATH)
 INCLUDES += $(LOCAL_PATH)/src
 INCLUDES += $(LOCAL_PATH)/src/utils
 INCLUDES += external/openssl/include
+# frameworks/base/cmds/keystore is the old location and can be dropped at some
+# point
 INCLUDES += frameworks/base/cmds/keystore
+INCLUDES += system/security/keystore
 ifdef CONFIG_DRIVER_NL80211
 INCLUDES += external/libnl-headers
 endif
@@ -140,6 +143,7 @@ CONFIG_NO_ACCOUNTING=y
 else
 OBJS += src/radius/radius.c
 OBJS += src/radius/radius_client.c
+OBJS += src/radius/radius_das.c
 endif
 
 ifdef CONFIG_NO_ACCOUNTING
@@ -207,8 +211,17 @@ NEED_ECC=y
 NEED_DH_GROUPS=y
 endif
 
+ifdef CONFIG_WNM
+CFLAGS += -DCONFIG_WNM
+OBJS += src/ap/wnm_ap.c
+endif
+
 ifdef CONFIG_IEEE80211N
 L_CFLAGS += -DCONFIG_IEEE80211N
+endif
+
+ifdef CONFIG_IEEE80211AC
+L_CFLAGS += -DCONFIG_IEEE80211AC
 endif
 
 include $(LOCAL_PATH)/src/drivers/drivers.mk
@@ -245,6 +258,14 @@ ifdef CONFIG_EAP_TLS
 L_CFLAGS += -DEAP_SERVER_TLS
 OBJS += src/eap_server/eap_server_tls.c
 TLS_FUNCS=y
+endif
+
+ifdef CONFIG_EAP_UNAUTH_TLS
+L_CFLAGS += -DEAP_SERVER_UNAUTH_TLS
+ifndef CONFIG_EAP_TLS
+OBJS += src/eap_server/eap_server_tls.c
+TLS_FUNCS=y
+endif
 endif
 
 ifdef CONFIG_EAP_PEAP
@@ -333,6 +354,13 @@ ifdef CONFIG_EAP_PWD
 L_CFLAGS += -DEAP_SERVER_PWD
 OBJS += src/eap_server/eap_server_pwd.c src/eap_common/eap_pwd_common.c
 NEED_SHA256=y
+endif
+
+ifdef CONFIG_EAP_EKE
+L_CFLAGS += -DEAP_SERVER_EKE
+OBJS += src/eap_server/eap_server_eke.c src/eap_common/eap_eke_common.c
+NEED_DH_GROUPS=y
+NEED_DH_GROUPS_ALL=y
 endif
 
 ifdef CONFIG_EAP_VENDOR_TEST
@@ -465,6 +493,15 @@ ifndef CONFIG_TLS
 CONFIG_TLS=openssl
 endif
 
+ifdef CONFIG_TLSV11
+L_CFLAGS += -DCONFIG_TLSV11
+endif
+
+ifdef CONFIG_TLSV12
+L_CFLAGS += -DCONFIG_TLSV12
+NEED_SHA256=y
+endif
+
 ifeq ($(CONFIG_TLS), openssl)
 ifdef TLS_FUNCS
 OBJS += src/crypto/tls_openssl.c
@@ -548,6 +585,9 @@ OBJS += src/tls/pkcs8.c
 NEED_SHA256=y
 NEED_BASE64=y
 NEED_TLS_PRF=y
+ifdef CONFIG_TLSV12
+NEED_TLS_PRF_SHA256=y
+endif
 NEED_MODEXP=y
 NEED_CIPHER=y
 L_CFLAGS += -DCONFIG_TLS_INTERNAL
@@ -722,7 +762,7 @@ ifdef CONFIG_INTERNAL_SHA256
 OBJS += src/crypto/sha256-internal.c
 endif
 ifdef NEED_TLS_PRF_SHA256
-OBJS += ../src/crypto/sha256-tlsprf.c
+OBJS += src/crypto/sha256-tlsprf.c
 endif
 endif
 
@@ -747,6 +787,7 @@ L_CFLAGS += -DCONFIG_NO_RANDOM_POOL
 else
 OBJS += src/crypto/random.c
 HOBJS += src/crypto/random.c
+HOBJS += src/utils/eloop.c
 HOBJS += $(SHA1OBJS)
 HOBJS += src/crypto/md5.c
 endif
@@ -785,9 +826,25 @@ ifdef CONFIG_IEEE80211N
 OBJS += src/ap/ieee802_11_ht.c
 endif
 
+ifdef CONFIG_IEEE80211AC
+OBJS += src/ap/ieee802_11_vht.c
+endif
+
 ifdef CONFIG_P2P_MANAGER
 L_CFLAGS += -DCONFIG_P2P_MANAGER
 OBJS += src/ap/p2p_hostapd.c
+endif
+
+ifdef CONFIG_HS20
+L_CFLAGS += -DCONFIG_HS20
+OBJS += src/ap/hs20.c
+CONFIG_INTERWORKING=y
+endif
+
+ifdef CONFIG_INTERWORKING
+L_CFLAGS += -DCONFIG_INTERWORKING
+OBJS += src/common/gas.c
+OBJS += src/ap/gas_serv.c
 endif
 
 OBJS += src/drivers/driver_common.c

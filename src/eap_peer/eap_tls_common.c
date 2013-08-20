@@ -1,6 +1,6 @@
 /*
  * EAP peer: EAP-TLS/PEAP/TTLS/FAST common functions
- * Copyright (c) 2004-2012, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2004-2013, Jouni Malinen <j@w1.fi>
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
@@ -164,6 +164,10 @@ static int eap_tls_init_connection(struct eap_sm *sm,
 {
 	int res;
 
+	if (config->ocsp)
+		params->flags |= TLS_CONN_REQUEST_OCSP;
+	if (config->ocsp == 2)
+		params->flags |= TLS_CONN_REQUIRE_OCSP;
 	data->conn = tls_connection_init(data->ssl_ctx);
 	if (data->conn == NULL) {
 		wpa_printf(MSG_INFO, "SSL: Failed to initialize new TLS "
@@ -336,6 +340,52 @@ fail:
 	os_free(out);
 	os_free(rnd);
 	return NULL;
+}
+
+
+/**
+ * eap_peer_tls_derive_session_id - Derive a Session-Id based on TLS data
+ * @sm: Pointer to EAP state machine allocated with eap_peer_sm_init()
+ * @data: Data for TLS processing
+ * @eap_type: EAP method used in Phase 1 (EAP_TYPE_TLS/PEAP/TTLS/FAST)
+ * @len: Pointer to length of the session ID generated
+ * Returns: Pointer to allocated Session-Id on success or %NULL on failure
+ *
+ * This function derive the Session-Id based on the TLS session data
+ * (client/server random and method type).
+ *
+ * The caller is responsible for freeing the returned buffer.
+ */
+u8 * eap_peer_tls_derive_session_id(struct eap_sm *sm,
+				    struct eap_ssl_data *data, u8 eap_type,
+				    size_t *len)
+{
+	struct tls_keys keys;
+	u8 *out;
+
+	/*
+	 * TLS library did not support session ID generation,
+	 * so get the needed TLS session parameters
+	 */
+	if (tls_connection_get_keys(sm->ssl_ctx, data->conn, &keys))
+		return NULL;
+
+	if (keys.client_random == NULL || keys.server_random == NULL ||
+	    keys.master_key == NULL)
+		return NULL;
+
+	*len = 1 + keys.client_random_len + keys.server_random_len;
+	out = os_malloc(*len);
+	if (out == NULL)
+		return NULL;
+
+	/* Session-Id = EAP type || client.random || server.random */
+	out[0] = eap_type;
+	os_memcpy(out + 1, keys.client_random, keys.client_random_len);
+	os_memcpy(out + 1 + keys.client_random_len, keys.server_random,
+	          keys.server_random_len);
+
+	return out;
 }
 
 

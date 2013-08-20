@@ -71,6 +71,9 @@ struct wps_data {
 	size_t dev_password_len;
 	u16 dev_pw_id;
 	int pbc;
+	u8 *alt_dev_password;
+	size_t alt_dev_password_len;
+	u16 alt_dev_pw_id;
 
 	/**
 	 * request_type - Request Type attribute from (Re)AssocReq
@@ -166,6 +169,7 @@ int wps_build_oob_dev_pw(struct wpabuf *msg, u16 dev_pw_id,
 			 const struct wpabuf *pubkey, const u8 *dev_pw,
 			 size_t dev_pw_len);
 struct wpabuf * wps_ie_encapsulate(struct wpabuf *data);
+int wps_build_mac_addr(struct wpabuf *msg, const u8 *addr);
 
 /* wps_attr_process.c */
 int wps_process_authenticator(struct wps_data *wps, const u8 *authenticator,
@@ -193,7 +197,8 @@ enum wps_process_res wps_registrar_process_msg(struct wps_data *wps,
 int wps_build_cred(struct wps_data *wps, struct wpabuf *msg);
 int wps_device_store(struct wps_registrar *reg,
 		     struct wps_device_data *dev, const u8 *uuid);
-void wps_registrar_selected_registrar_changed(struct wps_registrar *reg);
+void wps_registrar_selected_registrar_changed(struct wps_registrar *reg,
+					      u16 dev_pw_id);
 const u8 * wps_authorized_macs(struct wps_registrar *reg, size_t *count);
 int wps_registrar_pbc_overlap(struct wps_registrar *reg,
 			      const u8 *addr, const u8 *uuid_e);

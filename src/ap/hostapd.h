@@ -25,6 +25,7 @@ enum wps_event;
 union wps_event_data;
 
 struct hostapd_iface;
+struct hostapd_dynamic_iface;
 
 struct hapd_interfaces {
 	int (*reload_config)(struct hostapd_iface *iface);
@@ -37,10 +38,13 @@ struct hapd_interfaces {
 	int (*driver_init)(struct hostapd_iface *iface);
 
 	size_t count;
+	size_t count_dynamic;
 	int global_ctrl_sock;
 	char *global_iface_path;
 	char *global_iface_name;
+	gid_t ctrl_iface_group;
 	struct hostapd_iface **iface;
+	struct hostapd_dynamic_iface **dynamic_iface;
 };
 
 
@@ -151,6 +155,9 @@ struct hostapd_data {
 	void (*public_action_cb)(void *ctx, const u8 *buf, size_t len,
 				 int freq);
 	void *public_action_cb_ctx;
+	void (*public_action_cb2)(void *ctx, const u8 *buf, size_t len,
+				  int freq);
+	void *public_action_cb2_ctx;
 
 	int (*vendor_action_cb)(void *ctx, const u8 *buf, size_t len,
 				int freq);
@@ -216,7 +223,6 @@ struct hostapd_iface {
 	int num_ap; /* number of entries in ap_list */
 	struct ap_info *ap_list; /* AP info list head */
 	struct ap_info *ap_hash[STA_HASH_SIZE];
-	struct ap_info *ap_iter_list;
 
 	unsigned int drv_flags;
 
@@ -225,6 +231,12 @@ struct hostapd_iface {
 	 * struct wpa_driver_capa in driver.h
 	 */
 	unsigned int probe_resp_offloads;
+
+	/* extended capabilities supported by the driver */
+	const u8 *extended_capa, *extended_capa_mask;
+	unsigned int extended_capa_len;
+
+	unsigned int drv_max_acl_mac_addrs;
 
 	struct hostapd_hw_modes *hw_features;
 	int num_hw_features;
@@ -266,6 +278,16 @@ struct hostapd_iface {
 	void (*scan_cb)(struct hostapd_iface *iface);
 };
 
+/**
+ * struct hostapd_dynamic_iface - hostapd per dynamically allocated
+ * or added interface data structure
+ */
+struct hostapd_dynamic_iface {
+	char parent[IFNAMSIZ + 1];
+	char iface[IFNAMSIZ + 1];
+	unsigned int usage;
+};
+
 /* hostapd.c */
 int hostapd_for_each_interface(struct hapd_interfaces *interfaces,
 			       int (*cb)(struct hostapd_iface *iface,
@@ -302,6 +324,8 @@ int hostapd_notif_assoc(struct hostapd_data *hapd, const u8 *addr,
 			const u8 *ie, size_t ielen, int reassoc);
 void hostapd_notif_disassoc(struct hostapd_data *hapd, const u8 *addr);
 void hostapd_event_sta_low_ack(struct hostapd_data *hapd, const u8 *addr);
+void hostapd_event_connect_failed_reason(struct hostapd_data *hapd,
+					 const u8 *addr, int reason_code);
 int hostapd_probe_req_rx(struct hostapd_data *hapd, const u8 *sa, const u8 *da,
 			 const u8 *bssid, const u8 *ie, size_t ie_len,
 			 int ssi_signal);

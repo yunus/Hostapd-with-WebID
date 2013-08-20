@@ -163,6 +163,14 @@ struct hostapd_config * hostapd_config_defaults(void)
 	conf->ap_table_max_size = 255;
 	conf->ap_table_expiration_time = 60;
 
+#ifdef CONFIG_TESTING_OPTIONS
+	conf->ignore_probe_probability = 0.0d;
+	conf->ignore_auth_probability = 0.0d;
+	conf->ignore_assoc_probability = 0.0d;
+	conf->ignore_reassoc_probability = 0.0d;
+	conf->corrupt_gtk_rekey_mic_probability = 0.0d;
+#endif /* CONFIG_TESTING_OPTIONS */
+
 	return conf;
 }
 
@@ -434,6 +442,7 @@ static void hostapd_config_free_bss(struct hostapd_bss_config *conf)
 	os_free(conf->private_key_passwd);
 	os_free(conf->server_webid);
 	os_free(conf->webid_method);
+	os_free(conf->ocsp_stapling_response);
 	os_free(conf->dh_file);
 	os_free(conf->pac_opaque_encr_key);
 	os_free(conf->eap_fast_a_id);
@@ -444,19 +453,6 @@ static void hostapd_config_free_bss(struct hostapd_bss_config *conf)
 	os_free(conf->radius);
 	os_free(conf->radius_das_shared_secret);
 	hostapd_config_free_vlan(conf);
-	if (conf->ssid.dyn_vlan_keys) {
-		struct hostapd_ssid *ssid = &conf->ssid;
-		size_t i;
-		for (i = 0; i <= ssid->max_dyn_vlan_keys; i++) {
-			if (ssid->dyn_vlan_keys[i] == NULL)
-				continue;
-			hostapd_config_free_wep(ssid->dyn_vlan_keys[i]);
-			os_free(ssid->dyn_vlan_keys[i]);
-		}
-		os_free(ssid->dyn_vlan_keys);
-		ssid->dyn_vlan_keys = NULL;
-	}
-
 	os_free(conf->time_zone);
 
 #ifdef CONFIG_IEEE80211R
@@ -525,6 +521,8 @@ static void hostapd_config_free_bss(struct hostapd_bss_config *conf)
 	wpabuf_free(conf->vendor_elements);
 
 	os_free(conf->sae_groups);
+
+	os_free(conf->server_id);
 }
 
 
@@ -600,11 +598,23 @@ int hostapd_rate_found(int *list, int rate)
 }
 
 
-const char * hostapd_get_vlan_id_ifname(struct hostapd_vlan *vlan, int vlan_id)
+int hostapd_vlan_id_valid(struct hostapd_vlan *vlan, int vlan_id)
 {
 	struct hostapd_vlan *v = vlan;
 	while (v) {
 		if (v->vlan_id == vlan_id || v->vlan_id == VLAN_ID_WILDCARD)
+			return 1;
+		v = v->next;
+	}
+	return 0;
+}
+
+
+const char * hostapd_get_vlan_id_ifname(struct hostapd_vlan *vlan, int vlan_id)
+{
+	struct hostapd_vlan *v = vlan;
+	while (v) {
+		if (v->vlan_id == vlan_id)
 			return v->ifname;
 		v = v->next;
 	}

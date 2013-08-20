@@ -160,6 +160,9 @@ struct wpa_auth_config {
 #endif /* CONFIG_IEEE80211R */
 	int disable_gtk;
 	int ap_mlme;
+#ifdef CONFIG_TESTING_OPTIONS
+	double corrupt_gtk_rekey_mic_probability;
+#endif /* CONFIG_TESTING_OPTIONS */
 };
 
 typedef enum {
@@ -260,6 +263,8 @@ int wpa_auth_pmksa_add_preauth(struct wpa_authenticator *wpa_auth,
 			       const u8 *pmk, size_t len, const u8 *sta_addr,
 			       int session_timeout,
 			       struct eapol_state_machine *eapol);
+void wpa_auth_pmksa_remove(struct wpa_authenticator *wpa_auth,
+			   const u8 *sta_addr);
 int wpa_auth_sta_set_vlan(struct wpa_state_machine *sm, int vlan_id);
 void wpa_auth_eapol_key_tx_status(struct wpa_authenticator *wpa_auth,
 				  struct wpa_state_machine *sm, int ack);

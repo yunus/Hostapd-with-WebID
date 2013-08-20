@@ -52,6 +52,7 @@ struct p2p_device {
 	int go_neg_req_sent;
 	enum p2p_go_state go_state;
 	u8 dialog_token;
+	u8 tie_breaker;
 	u8 intended_addr[ETH_ALEN];
 
 	char country[3];
@@ -91,6 +92,7 @@ struct p2p_device {
 #define P2P_DEV_REPORTED_ONCE BIT(15)
 #define P2P_DEV_PREFER_PERSISTENT_RECONN BIT(16)
 #define P2P_DEV_PD_BEFORE_GO_NEG BIT(17)
+#define P2P_DEV_NO_PREF_CHAN BIT(18)
 	unsigned int flags;
 
 	int status; /* enum p2p_status_code */
@@ -383,12 +385,15 @@ struct p2p_data {
 	} start_after_scan;
 	u8 after_scan_peer[ETH_ALEN];
 	struct p2p_pending_action_tx *after_scan_tx;
+	unsigned int after_scan_tx_in_progress:1;
 
 	/* Requested device types for find/search */
 	unsigned int num_req_dev_types;
 	u8 *req_dev_types;
 	u8 *find_dev_id;
 	u8 find_dev_id_buf[ETH_ALEN];
+
+	struct os_time find_start; /* time of last p2p_find start */
 
 	struct p2p_group **groups;
 	size_t num_groups;
@@ -413,6 +418,7 @@ struct p2p_data {
 	int best_freq_24;
 	int best_freq_5;
 	int best_freq_overall;
+	int own_freq_preference;
 
 	/**
 	 * wps_vendor_ext - WPS Vendor Extensions to add
@@ -551,9 +557,8 @@ struct p2p_group_info {
 
 /* p2p_utils.c */
 int p2p_random(char *buf, size_t len);
-int p2p_channel_to_freq(const char *country, int reg_class, int channel);
-int p2p_freq_to_channel(const char *country, unsigned int freq, u8 *reg_class,
-			u8 *channel);
+int p2p_channel_to_freq(int op_class, int channel);
+int p2p_freq_to_channel(unsigned int freq, u8 *op_class, u8 *channel);
 void p2p_channels_intersect(const struct p2p_channels *a,
 			    const struct p2p_channels *b,
 			    struct p2p_channels *res);
@@ -693,7 +698,7 @@ struct p2p_device * p2p_add_dev_from_go_neg_req(struct p2p_data *p2p,
 void p2p_add_dev_info(struct p2p_data *p2p, const u8 *addr,
 		      struct p2p_device *dev, struct p2p_message *msg);
 int p2p_add_device(struct p2p_data *p2p, const u8 *addr, int freq,
-		   unsigned int age_ms, int level, const u8 *ies,
+		   struct os_time *rx_time, int level, const u8 *ies,
 		   size_t ies_len, int scan_res);
 struct p2p_device * p2p_get_device(struct p2p_data *p2p, const u8 *addr);
 struct p2p_device * p2p_get_device_interface(struct p2p_data *p2p,
@@ -710,5 +715,13 @@ int p2p_send_action(struct p2p_data *p2p, unsigned int freq, const u8 *dst,
 		    const u8 *src, const u8 *bssid, const u8 *buf,
 		    size_t len, unsigned int wait_time);
 void p2p_stop_listen_for_freq(struct p2p_data *p2p, int freq);
+int p2p_prepare_channel(struct p2p_data *p2p, struct p2p_device *dev,
+			unsigned int force_freq, unsigned int pref_freq);
+void p2p_dbg(struct p2p_data *p2p, const char *fmt, ...)
+PRINTF_FORMAT(2, 3);
+void p2p_info(struct p2p_data *p2p, const char *fmt, ...)
+PRINTF_FORMAT(2, 3);
+void p2p_err(struct p2p_data *p2p, const char *fmt, ...)
+PRINTF_FORMAT(2, 3);
 
 #endif /* P2P_I_H */

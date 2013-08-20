@@ -24,8 +24,15 @@ int wps_build_public_key(struct wps_data *wps, struct wpabuf *msg)
 
 	wpa_printf(MSG_DEBUG, "WPS:  * Public Key");
 	wpabuf_free(wps->dh_privkey);
-	if (wps->dev_pw_id != DEV_PW_DEFAULT && wps->wps->dh_privkey) {
+	wps->dh_privkey = NULL;
+	if (wps->dev_pw_id != DEV_PW_DEFAULT && wps->wps->dh_privkey &&
+	    wps->wps->dh_ctx) {
 		wpa_printf(MSG_DEBUG, "WPS: Using pre-configured DH keys");
+		if (wps->wps->dh_pubkey == NULL) {
+			wpa_printf(MSG_DEBUG,
+				   "WPS: wps->wps->dh_pubkey == NULL");
+			return -1;
+		}
 		wps->dh_privkey = wpabuf_dup(wps->wps->dh_privkey);
 		wps->dh_ctx = wps->wps->dh_ctx;
 		wps->wps->dh_ctx = NULL;
@@ -34,13 +41,22 @@ int wps_build_public_key(struct wps_data *wps, struct wpabuf *msg)
 	} else if (wps->dev_pw_id >= 0x10 && wps->wps->ap &&
 		   wps->dev_pw_id == wps->wps->ap_nfc_dev_pw_id) {
 		wpa_printf(MSG_DEBUG, "WPS: Using NFC password token DH keys");
+		if (wps->wps->ap_nfc_dh_privkey == NULL) {
+			wpa_printf(MSG_DEBUG,
+				   "WPS: wps->wps->ap_nfc_dh_privkey == NULL");
+			return -1;
+		}
+		if (wps->wps->ap_nfc_dh_pubkey == NULL) {
+			wpa_printf(MSG_DEBUG,
+				   "WPS: wps->wps->ap_nfc_dh_pubkey == NULL");
+			return -1;
+		}
 		wps->dh_privkey = wpabuf_dup(wps->wps->ap_nfc_dh_privkey);
 		pubkey = wpabuf_dup(wps->wps->ap_nfc_dh_pubkey);
 		wps->dh_ctx = dh5_init_fixed(wps->dh_privkey, pubkey);
 #endif /* CONFIG_WPS_NFC */
 	} else {
 		wpa_printf(MSG_DEBUG, "WPS: Generate new DH keys");
-		wps->dh_privkey = NULL;
 		dh5_free(wps->dh_ctx);
 		wps->dh_ctx = dh5_init(&wps->dh_privkey, &pubkey);
 		pubkey = wpabuf_zeropad(pubkey, 192);
@@ -400,4 +416,15 @@ struct wpabuf * wps_ie_encapsulate(struct wpabuf *data)
 	wpabuf_free(data);
 
 	return ie;
+}
+
+
+int wps_build_mac_addr(struct wpabuf *msg, const u8 *addr)
+{
+	wpa_printf(MSG_DEBUG, "WPS:  * MAC Address (" MACSTR ")",
+		   MAC2STR(addr));
+	wpabuf_put_be16(msg, ATTR_MAC_ADDR);
+	wpabuf_put_be16(msg, ETH_ALEN);
+	wpabuf_put_data(msg, addr, ETH_ALEN);
+	return 0;
 }

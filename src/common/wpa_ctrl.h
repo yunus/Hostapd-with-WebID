@@ -44,6 +44,8 @@ extern "C" {
 #define WPA_EVENT_EAP_PEER_CERT "CTRL-EVENT-EAP-PEER-CERT "
 /** EAP TLS certificate chain validation error */
 #define WPA_EVENT_EAP_TLS_CERT_ERROR "CTRL-EVENT-EAP-TLS-CERT-ERROR "
+/** EAP status */
+#define WPA_EVENT_EAP_STATUS "CTRL-EVENT-EAP-STATUS "
 /** EAP authentication completed successfully */
 #define WPA_EVENT_EAP_SUCCESS "CTRL-EVENT-EAP-SUCCESS "
 /** EAP authentication failed (EAP-Failure received) */
@@ -130,6 +132,9 @@ extern "C" {
 #define P2P_EVENT_INVITATION_RESULT "P2P-INVITATION-RESULT "
 #define P2P_EVENT_FIND_STOPPED "P2P-FIND-STOPPED "
 
+/* parameters: <PMF enabled> <timeout in ms> <Session Information URL> */
+#define ESS_DISASSOC_IMMINENT "ESS-DISASSOC-IMMINENT "
+
 #define INTERWORKING_AP "INTERWORKING-AP "
 #define INTERWORKING_NO_MATCH "INTERWORKING-NO-MATCH "
 
@@ -146,10 +151,12 @@ extern "C" {
 #define AP_STA_CONNECTED "AP-STA-CONNECTED "
 #define AP_STA_DISCONNECTED "AP-STA-DISCONNECTED "
 
+#define AP_REJECTED_MAX_STA "AP-REJECTED-MAX-STA "
+#define AP_REJECTED_BLOCKED_STA "AP-REJECTED-BLOCKED-STA "
 
 /* BSS command information masks */
 
-#define WPA_BSS_MASK_ALL		0xFFFFFFFF
+#define WPA_BSS_MASK_ALL		0xFFFDFFFF
 #define WPA_BSS_MASK_ID			BIT(0)
 #define WPA_BSS_MASK_BSSID		BIT(1)
 #define WPA_BSS_MASK_FREQ		BIT(2)
@@ -167,6 +174,7 @@ extern "C" {
 #define WPA_BSS_MASK_P2P_SCAN		BIT(14)
 #define WPA_BSS_MASK_INTERNETW		BIT(15)
 #define WPA_BSS_MASK_WIFI_DISPLAY	BIT(16)
+#define WPA_BSS_MASK_DELIM		BIT(17)
 
 
 /* wpa_supplicant/hostapd control interface access */

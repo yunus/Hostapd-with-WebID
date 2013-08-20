@@ -1232,7 +1232,7 @@ void __wpa_send_eapol(struct wpa_authenticator *wpa_auth,
 	else
 		version = WPA_KEY_INFO_TYPE_HMAC_MD5_RC4;
 
-	pairwise = key_info & WPA_KEY_INFO_KEY_TYPE;
+	pairwise = !!(key_info & WPA_KEY_INFO_KEY_TYPE);
 
 	wpa_printf(MSG_DEBUG, "WPA: Send EAPOL(version=%d secure=%d mic=%d "
 		   "ack=%d install=%d pairwise=%d kde_len=%lu keyidx=%d "
@@ -1347,6 +1347,16 @@ void __wpa_send_eapol(struct wpa_authenticator *wpa_auth,
 		}
 		wpa_eapol_key_mic(sm->PTK.kck, version, (u8 *) hdr, len,
 				  key->key_mic);
+#ifdef CONFIG_TESTING_OPTIONS
+		if (!pairwise &&
+		    wpa_auth->conf.corrupt_gtk_rekey_mic_probability > 0.0d &&
+		    drand48() <
+		    wpa_auth->conf.corrupt_gtk_rekey_mic_probability) {
+			wpa_auth_logger(wpa_auth, sm->addr, LOGGER_INFO,
+					"Corrupting group EAPOL-Key Key MIC");
+			key->key_mic[0]++;
+		}
+#endif /* CONFIG_TESTING_OPTIONS */
 	}
 
 	wpa_auth_set_eapol(sm->wpa_auth, sm->addr, WPA_EAPOL_inc_EapolFramesTx,
@@ -1598,6 +1608,7 @@ SM_STATE(WPA_PTK, AUTHENTICATION2)
 	SM_ENTRY_MA(WPA_PTK, AUTHENTICATION2, wpa_ptk);
 
 	wpa_group_ensure_init(sm->wpa_auth, sm->group);
+	sm->ReAuthenticationRequest = FALSE;
 
 	/*
 	 * Definition of ANonce selection in IEEE Std 802.11i-2004 is somewhat
@@ -1611,12 +1622,11 @@ SM_STATE(WPA_PTK, AUTHENTICATION2)
 	if (random_get_bytes(sm->ANonce, WPA_NONCE_LEN)) {
 		wpa_printf(MSG_ERROR, "WPA: Failed to get random data for "
 			   "ANonce.");
-		wpa_sta_disconnect(sm->wpa_auth, sm->addr);
+		sm->Disconnect = TRUE;
 		return;
 	}
 	wpa_hexdump(MSG_DEBUG, "WPA: Assign ANonce", sm->ANonce,
 		    WPA_NONCE_LEN);
-	sm->ReAuthenticationRequest = FALSE;
 	/* IEEE 802.11i does not clear TimeoutCtr here, but this is more
 	 * logical place than INITIALIZE since AUTHENTICATION2 can be
 	 * re-entered on ReAuthenticationRequest without going through
@@ -2931,6 +2941,22 @@ int wpa_auth_pmksa_add_preauth(struct wpa_authenticator *wpa_auth,
 		return 0;
 
 	return -1;
+}
+
+
+void wpa_auth_pmksa_remove(struct wpa_authenticator *wpa_auth,
+			   const u8 *sta_addr)
+{
+	struct rsn_pmksa_cache_entry *pmksa;
+
+	if (wpa_auth == NULL || wpa_auth->pmksa == NULL)
+		return;
+	pmksa = pmksa_cache_auth_get(wpa_auth->pmksa, sta_addr, NULL);
+	if (pmksa) {
+		wpa_printf(MSG_DEBUG, "WPA: Remove PMKSA cache entry for "
+			   MACSTR " based on request", MAC2STR(sta_addr));
+		pmksa_cache_free_entry(wpa_auth->pmksa, pmksa);
+	}
 }
 
 

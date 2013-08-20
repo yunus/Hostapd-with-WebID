@@ -9,6 +9,7 @@
 #include "utils/includes.h"
 #ifndef CONFIG_NATIVE_WINDOWS
 #include <syslog.h>
+#include <grp.h>
 #endif /* CONFIG_NATIVE_WINDOWS */
 
 #include "utils/common.h"
@@ -193,6 +194,8 @@ static struct hostapd_iface * hostapd_init(const char *config_file)
 	return hapd_iface;
 
 fail:
+	wpa_printf(MSG_ERROR, "Failed to set up interface with %s",
+		   config_file);
 	if (conf)
 		hostapd_config_free(conf);
 	if (hapd_iface) {
@@ -273,6 +276,10 @@ static int hostapd_driver_init(struct hostapd_iface *iface)
 	    hapd->driver->get_capa(hapd->drv_priv, &capa) == 0) {
 		iface->drv_flags = capa.flags;
 		iface->probe_resp_offloads = capa.probe_resp_offloads;
+		iface->extended_capa = capa.extended_capa;
+		iface->extended_capa_mask = capa.extended_capa_mask;
+		iface->extended_capa_len = capa.extended_capa_len;
+		iface->drv_max_acl_mac_addrs = capa.max_acl_mac_addrs;
 	}
 
 	return 0;
@@ -297,13 +304,18 @@ hostapd_interface_init(struct hapd_interfaces *interfaces,
 			iface->bss[0]->conf->logger_stdout_level--;
 	}
 
-	if (iface->conf->bss[0].iface[0] != 0 ||
-	    hostapd_drv_none(iface->bss[0])) {
-		if (hostapd_driver_init(iface) ||
-			hostapd_setup_interface(iface)) {
-			hostapd_interface_deinit_free(iface);
-			return NULL;
-		}
+	if (iface->conf->bss[0].iface[0] == '\0' &&
+	    !hostapd_drv_none(iface->bss[0])) {
+		wpa_printf(MSG_ERROR, "Interface name not specified in %s",
+			   config_fname);
+		hostapd_interface_deinit_free(iface);
+		return NULL;
+	}
+
+	if (hostapd_driver_init(iface) ||
+	    hostapd_setup_interface(iface)) {
+		hostapd_interface_deinit_free(iface);
+		return NULL;
 	}
 
 	return iface;
@@ -480,7 +492,8 @@ static void usage(void)
 		"\n"
 		"usage: hostapd [-hdBKtv] [-P <PID file>] [-e <entropy file>] "
 		"\\\n"
-		"         [-g <global ctrl_iface>] <configuration file(s)>\n"
+		"         [-g <global ctrl_iface>] [-G <group>] \\\n"
+		"         <configuration file(s)>\n"
 		"\n"
 		"options:\n"
 		"   -h   show this usage\n"
@@ -488,6 +501,7 @@ static void usage(void)
 		"   -B   run daemon in the background\n"
 		"   -e   entropy file\n"
 		"   -g   global control interface path\n"
+		"   -G   group for control interfaces\n"
 		"   -P   PID file\n"
 		"   -K   include key data in debug messages\n"
 #ifdef CONFIG_DEBUG_FILE
@@ -519,6 +533,8 @@ static int hostapd_get_global_ctrl_iface(struct hapd_interfaces *interfaces,
 		return -1;
 	pos = os_strrchr(interfaces->global_iface_path, '/');
 	if (pos == NULL) {
+		wpa_printf(MSG_ERROR, "No '/' in the global control interface "
+			   "file");
 		os_free(interfaces->global_iface_path);
 		interfaces->global_iface_path = NULL;
 		return -1;
@@ -527,6 +543,22 @@ static int hostapd_get_global_ctrl_iface(struct hapd_interfaces *interfaces,
 	*pos = '\0';
 	interfaces->global_iface_name = pos + 1;
 
+	return 0;
+}
+
+
+static int hostapd_get_ctrl_iface_group(struct hapd_interfaces *interfaces,
+					const char *group)
+{
+#ifndef CONFIG_NATIVE_WINDOWS
+	struct group *grp;
+	grp = getgrnam(group);
+	if (grp == NULL) {
+		wpa_printf(MSG_ERROR, "Unknown group '%s'", group);
+		return -1;
+	}
+	interfaces->ctrl_iface_group = grp->gr_gid;
+#endif /* CONFIG_NATIVE_WINDOWS */
 	return 0;
 }
 
@@ -556,7 +588,7 @@ int main(int argc, char *argv[])
 	interfaces.global_ctrl_sock = -1;
 
 	for (;;) {
-		c = getopt(argc, argv, "Bde:f:hKP:tvg:");
+		c = getopt(argc, argv, "Bde:f:hKP:tvg:G:");
 		if (c < 0)
 			break;
 		switch (c) {
@@ -592,9 +624,13 @@ int main(int argc, char *argv[])
 			exit(1);
 			break;
 		case 'g':
-			hostapd_get_global_ctrl_iface(&interfaces, optarg);
+			if (hostapd_get_global_ctrl_iface(&interfaces, optarg))
+				return -1;
 			break;
-
+		case 'G':
+			if (hostapd_get_ctrl_iface_group(&interfaces, optarg))
+				return -1;
+			break;
 		default:
 			usage();
 			break;
@@ -619,22 +655,28 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (hostapd_global_init(&interfaces, entropy_file))
+	if (hostapd_global_init(&interfaces, entropy_file)) {
+		wpa_printf(MSG_ERROR, "Failed to initilize global context");
 		return -1;
+	}
 
 	/* Initialize interfaces */
 	for (i = 0; i < interfaces.count; i++) {
 		interfaces.iface[i] = hostapd_interface_init(&interfaces,
 							     argv[optind + i],
 							     debug);
-		if (!interfaces.iface[i])
+		if (!interfaces.iface[i]) {
+			wpa_printf(MSG_ERROR, "Failed to initialize interface");
 			goto out;
+		}
 	}
 
 	hostapd_global_ctrl_iface_init(&interfaces);
 
-	if (hostapd_global_run(&interfaces, daemonize, pid_file))
+	if (hostapd_global_run(&interfaces, daemonize, pid_file)) {
+		wpa_printf(MSG_ERROR, "Failed to start eloop");
 		goto out;
+	}
 
 	ret = 0;
 

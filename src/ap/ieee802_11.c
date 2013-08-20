@@ -557,6 +557,16 @@ static void handle_auth(struct hostapd_data *hapd,
 		return;
 	}
 
+#ifdef CONFIG_TESTING_OPTIONS
+	if (hapd->iconf->ignore_auth_probability > 0.0d &&
+	    drand48() < hapd->iconf->ignore_auth_probability) {
+		wpa_printf(MSG_INFO,
+			   "TESTING: ignoring auth frame from " MACSTR,
+			   MAC2STR(mgmt->sa));
+		return;
+	}
+#endif /* CONFIG_TESTING_OPTIONS */
+
 	auth_alg = le_to_host16(mgmt->u.auth.auth_alg);
 	auth_transaction = le_to_host16(mgmt->u.auth.auth_transaction);
 	status_code = le_to_host16(mgmt->u.auth.status_code);
@@ -635,13 +645,12 @@ static void handle_auth(struct hostapd_data *hapd,
 
 	sta = ap_sta_add(hapd, mgmt->sa);
 	if (!sta) {
-		resp = WLAN_STATUS_UNSPECIFIED_FAILURE;
+		resp = WLAN_STATUS_AP_UNABLE_TO_HANDLE_NEW_STA;
 		goto fail;
 	}
 
 	if (vlan_id > 0) {
-		if (hostapd_get_vlan_id_ifname(hapd->conf->vlan,
-					       vlan_id) == NULL) {
+		if (!hostapd_vlan_id_valid(hapd->conf->vlan, vlan_id)) {
 			hostapd_logger(hapd, sta->addr, HOSTAPD_MODULE_RADIUS,
 				       HOSTAPD_LEVEL_INFO, "Invalid VLAN ID "
 				       "%d received from RADIUS server",
@@ -1226,6 +1235,26 @@ static void handle_assoc(struct hostapd_data *hapd,
 		return;
 	}
 
+#ifdef CONFIG_TESTING_OPTIONS
+	if (reassoc) {
+		if (hapd->iconf->ignore_reassoc_probability > 0.0d &&
+		    drand48() < hapd->iconf->ignore_reassoc_probability) {
+			wpa_printf(MSG_INFO,
+				   "TESTING: ignoring reassoc request from "
+				   MACSTR, MAC2STR(mgmt->sa));
+			return;
+		}
+	} else {
+		if (hapd->iconf->ignore_assoc_probability > 0.0d &&
+		    drand48() < hapd->iconf->ignore_assoc_probability) {
+			wpa_printf(MSG_INFO,
+				   "TESTING: ignoring assoc request from "
+				   MACSTR, MAC2STR(mgmt->sa));
+			return;
+		}
+	}
+#endif /* CONFIG_TESTING_OPTIONS */
+
 	if (reassoc) {
 		capab_info = le_to_host16(mgmt->u.reassoc_req.capab_info);
 		listen_interval = le_to_host16(
@@ -1599,8 +1628,14 @@ static void handle_action(struct hostapd_data *hapd,
 			hapd->public_action_cb(hapd->public_action_cb_ctx,
 					       (u8 *) mgmt, len,
 					       hapd->iface->freq);
-			return;
 		}
+		if (hapd->public_action_cb2) {
+			hapd->public_action_cb2(hapd->public_action_cb2_ctx,
+						(u8 *) mgmt, len,
+						hapd->iface->freq);
+		}
+		if (hapd->public_action_cb || hapd->public_action_cb2)
+			return;
 		break;
 	case WLAN_ACTION_VENDOR_SPECIFIC:
 		if (hapd->vendor_action_cb) {
@@ -1783,6 +1818,30 @@ static void handle_auth_cb(struct hostapd_data *hapd,
 }
 
 
+static void hostapd_set_wds_encryption(struct hostapd_data *hapd,
+				       struct sta_info *sta,
+				       char *ifname_wds)
+{
+	int i;
+	struct hostapd_ssid *ssid = sta->ssid;
+
+	if (hapd->conf->ieee802_1x || hapd->conf->wpa)
+		return;
+
+	for (i = 0; i < 4; i++) {
+		if (ssid->wep.key[i] &&
+		    hostapd_drv_set_key(ifname_wds, hapd, WPA_ALG_WEP, NULL, i,
+					i == ssid->wep.idx, NULL, 0,
+					ssid->wep.key[i], ssid->wep.len[i])) {
+			wpa_printf(MSG_WARNING,
+				   "Could not set WEP keys for WDS interface; %s",
+				   ifname_wds);
+			break;
+		}
+	}
+}
+
+
 static void handle_assoc_cb(struct hostapd_data *hapd,
 			    const struct ieee80211_mgmt *mgmt,
 			    size_t len, int reassoc, int ok)
@@ -1885,8 +1944,15 @@ static void handle_assoc_cb(struct hostapd_data *hapd,
 		goto fail;
 	}
 
-	if (sta->flags & WLAN_STA_WDS)
-		hostapd_set_wds_sta(hapd, sta->addr, sta->aid, 1);
+	if (sta->flags & WLAN_STA_WDS) {
+		int ret;
+		char ifname_wds[IFNAMSIZ + 1];
+
+		ret = hostapd_set_wds_sta(hapd, ifname_wds, sta->addr,
+					  sta->aid, 1);
+		if (!ret)
+			hostapd_set_wds_encryption(hapd, sta, ifname_wds);
+	}
 
 	if (sta->eapol_sm == NULL) {
 		/*
@@ -2127,11 +2193,18 @@ void ieee802_11_rx_from_unknown(struct hostapd_data *hapd, const u8 *src,
 			return;
 
 		if (wds && !(sta->flags & WLAN_STA_WDS)) {
+			int ret;
+			char ifname_wds[IFNAMSIZ + 1];
+
 			wpa_printf(MSG_DEBUG, "Enable 4-address WDS mode for "
 				   "STA " MACSTR " (aid %u)",
 				   MAC2STR(sta->addr), sta->aid);
 			sta->flags |= WLAN_STA_WDS;
-			hostapd_set_wds_sta(hapd, sta->addr, sta->aid, 1);
+			ret = hostapd_set_wds_sta(hapd, ifname_wds,
+						  sta->addr, sta->aid, 1);
+			if (!ret)
+				hostapd_set_wds_encryption(hapd, sta,
+							   ifname_wds);
 		}
 		return;
 	}

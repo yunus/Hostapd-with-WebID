@@ -1,4 +1,5 @@
 TESTS=test-base64 test-md4 test-md5 test-milenage test-ms_funcs \
+	test-bitfield \
 	test-printf \
 	test-sha1 \
 	test-sha256 test-aes test-asn1 test-x509 test-x509v3 test-list test-rc4
@@ -47,6 +48,9 @@ test-asn1: test-asn1.o $(LIBS)
 test-base64: test-base64.o $(LIBS)
 	$(LDO) $(LDFLAGS) -o $@ $^
 
+test-bitfield: test-bitfield.o $(LIBS)
+	$(LDO) $(LDFLAGS) -o $@ $^
+
 test-https: test-https.o $(LIBS)
 	$(LDO) $(LDFLAGS) -o $@ $< $(LLIBS)
 
@@ -57,7 +61,7 @@ test-md4: test-md4.o $(LIBS)
 	$(LDO) $(LDFLAGS) -o $@ $^
 
 test-md5: test-md5.o $(LIBS)
-	$(LDO) $(LDFLAGS) -o $@ $^
+	$(LDO) $(LDFLAGS) -o $@ $^ $(LIBS)
 
 test-milenage: test-milenage.o $(LIBS)
 	$(LDO) $(LDFLAGS) -o $@ $^
@@ -72,7 +76,7 @@ test-rc4: test-rc4.o $(LIBS)
 	$(LDO) $(LDFLAGS) -o $@ $^
 
 test-sha1: test-sha1.o $(LIBS)
-	$(LDO) $(LDFLAGS) -o $@ $^
+	$(LDO) $(LDFLAGS) -o $@ $^ $(LIBS)
 
 test-sha256: test-sha256.o $(LIBS)
 	$(LDO) $(LDFLAGS) -o $@ $^
@@ -86,6 +90,7 @@ test-x509v3: test-x509v3.o $(LIBS)
 
 run-tests: $(TESTS)
 	./test-aes
+	./test-bitfield
 	./test-list
 	./test-md4
 	./test-md5

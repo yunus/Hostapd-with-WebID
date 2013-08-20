@@ -1,6 +1,6 @@
 /*
  * Wi-Fi Protected Setup
- * Copyright (c) 2007-2012, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2007-2013, Jouni Malinen <j@w1.fi>
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
@@ -793,14 +793,19 @@ void wps_er_refresh(struct wps_er *er);
 void wps_er_deinit(struct wps_er *er, void (*cb)(void *ctx), void *ctx);
 void wps_er_set_sel_reg(struct wps_er *er, int sel_reg, u16 dev_passwd_id,
 			u16 sel_reg_config_methods);
-int wps_er_pbc(struct wps_er *er, const u8 *uuid);
-int wps_er_learn(struct wps_er *er, const u8 *uuid, const u8 *pin,
-		 size_t pin_len);
-int wps_er_set_config(struct wps_er *er, const u8 *uuid,
+int wps_er_pbc(struct wps_er *er, const u8 *uuid, const u8 *addr);
+const u8 * wps_er_get_sta_uuid(struct wps_er *er, const u8 *addr);
+int wps_er_learn(struct wps_er *er, const u8 *uuid, const u8 *addr,
+		 const u8 *pin, size_t pin_len);
+int wps_er_set_config(struct wps_er *er, const u8 *uuid, const u8 *addr,
 		      const struct wps_credential *cred);
-int wps_er_config(struct wps_er *er, const u8 *uuid, const u8 *pin,
-		  size_t pin_len, const struct wps_credential *cred);
-struct wpabuf * wps_er_nfc_config_token(struct wps_er *er, const u8 *uuid);
+int wps_er_config(struct wps_er *er, const u8 *uuid, const u8 *addr,
+		  const u8 *pin, size_t pin_len,
+		  const struct wps_credential *cred);
+struct wpabuf * wps_er_config_token_from_cred(struct wps_context *wps,
+					      struct wps_credential *cred);
+struct wpabuf * wps_er_nfc_config_token(struct wps_er *er, const u8 *uuid,
+					const u8 *addr);
 
 int wps_dev_type_str2bin(const char *str, u8 dev_type[WPS_DEV_TYPE_LEN]);
 char * wps_dev_type_bin2str(const u8 dev_type[WPS_DEV_TYPE_LEN], char *buf,
@@ -810,6 +815,8 @@ u16 wps_config_methods_str2bin(const char *str);
 struct wpabuf * wps_build_nfc_pw_token(u16 dev_pw_id,
 				       const struct wpabuf *pubkey,
 				       const struct wpabuf *dev_pw);
+struct wpabuf * wps_nfc_token_build(int ndef, int id, struct wpabuf *pubkey,
+				    struct wpabuf *dev_pw);
 struct wpabuf * wps_nfc_token_gen(int ndef, int *id, struct wpabuf **pubkey,
 				  struct wpabuf **privkey,
 				  struct wpabuf **dev_pw);
@@ -817,6 +824,7 @@ struct wpabuf * wps_nfc_token_gen(int ndef, int *id, struct wpabuf **pubkey,
 /* ndef.c */
 struct wpabuf * ndef_parse_wifi(const struct wpabuf *buf);
 struct wpabuf * ndef_build_wifi(const struct wpabuf *buf);
+struct wpabuf * ndef_build_wifi_hc(int begin);
 struct wpabuf * ndef_build_wifi_hr(void);
 
 #ifdef CONFIG_WPS_STRICT

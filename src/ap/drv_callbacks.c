@@ -13,6 +13,7 @@
 #include "drivers/driver.h"
 #include "common/ieee802_11_defs.h"
 #include "common/ieee802_11_common.h"
+#include "common/wpa_ctrl.h"
 #include "crypto/random.h"
 #include "p2p/p2p.h"
 #include "wps/wps.h"
@@ -84,6 +85,7 @@ int hostapd_notif_assoc(struct hostapd_data *hapd, const u8 *addr,
 
 	sta = ap_get_sta(hapd, addr);
 	if (sta) {
+		ap_sta_no_session_timeout(hapd, sta);
 		accounting_sta_stop(hapd, sta);
 
 		/*
@@ -393,6 +395,22 @@ void hostapd_event_ch_switch(struct hostapd_data *hapd, int freq, int ht,
 }
 
 
+void hostapd_event_connect_failed_reason(struct hostapd_data *hapd,
+					 const u8 *addr, int reason_code)
+{
+	switch (reason_code) {
+	case MAX_CLIENT_REACHED:
+		wpa_msg(hapd->msg_ctx, MSG_INFO, AP_REJECTED_MAX_STA MACSTR,
+			MAC2STR(addr));
+		break;
+	case BLOCKED_CLIENT:
+		wpa_msg(hapd->msg_ctx, MSG_INFO, AP_REJECTED_BLOCKED_STA MACSTR,
+			MAC2STR(addr));
+		break;
+	}
+}
+
+
 int hostapd_probe_req_rx(struct hostapd_data *hapd, const u8 *sa, const u8 *da,
 			 const u8 *bssid, const u8 *ie, size_t ie_len,
 			 int ssi_signal)
@@ -452,7 +470,7 @@ static void hostapd_notif_auth(struct hostapd_data *hapd,
 	if (!sta) {
 		sta = ap_sta_add(hapd, rx_auth->peer);
 		if (sta == NULL) {
-			status = WLAN_STATUS_UNSPECIFIED_FAILURE;
+			status = WLAN_STATUS_AP_UNABLE_TO_HANDLE_NEW_STA;
 			goto fail;
 		}
 	}
@@ -713,6 +731,9 @@ void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
 		if (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT &&
 		    WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_BEACON)
 			level = MSG_EXCESSIVE;
+		if (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT &&
+		    WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_PROBE_REQ)
+			level = MSG_EXCESSIVE;
 	}
 
 	wpa_dbg(hapd->msg_ctx, level, "Event %s (%d) received",
@@ -827,6 +848,13 @@ void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
 		hostapd_event_ch_switch(hapd, data->ch_switch.freq,
 					data->ch_switch.ht_enabled,
 					data->ch_switch.ch_offset);
+		break;
+	case EVENT_CONNECT_FAILED_REASON:
+		if (!data)
+			break;
+		hostapd_event_connect_failed_reason(
+			hapd, data->connect_failed_reason.addr,
+			data->connect_failed_reason.code);
 		break;
 	default:
 		wpa_printf(MSG_DEBUG, "Unknown event %d", event);

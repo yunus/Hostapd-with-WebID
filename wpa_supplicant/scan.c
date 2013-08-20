@@ -11,6 +11,7 @@
 #include "utils/common.h"
 #include "utils/eloop.h"
 #include "common/ieee802_11_defs.h"
+#include "common/wpa_ctrl.h"
 #include "config.h"
 #include "wpa_supplicant_i.h"
 #include "driver_i.h"
@@ -226,6 +227,7 @@ int wpa_supplicant_trigger_scan(struct wpa_supplicant *wpa_s,
 		wpa_supplicant_notify_scanning(wpa_s, 0);
 		wpas_notify_scan_done(wpa_s, 0);
 	} else {
+		os_get_time(&wpa_s->scan_trigger_time);
 		wpa_s->scan_runs++;
 		wpa_s->normal_scans++;
 	}
@@ -446,6 +448,11 @@ static struct wpabuf * wpa_supplicant_extra_ies(struct wpa_supplicant *wpa_s)
 
 #endif /* CONFIG_WPS */
 
+#ifdef CONFIG_HS20
+	if (wpa_s->conf->hs20 && wpabuf_resize(&extra_ie, 7) == 0)
+		wpas_hs20_add_indication(extra_ie);
+#endif /* CONFIG_HS20 */
+
 	return extra_ie;
 }
 
@@ -474,46 +481,64 @@ static int non_p2p_network_enabled(struct wpa_supplicant *wpa_s)
 	return 0;
 }
 
+#endif /* CONFIG_P2P */
 
-/*
- * Find the operating frequency of any other virtual interface that is using
- * the same radio concurrently.
- */
-static int shared_vif_oper_freq(struct wpa_supplicant *wpa_s)
+
+static struct hostapd_hw_modes * get_mode(struct hostapd_hw_modes *modes,
+					  u16 num_modes,
+					  enum hostapd_hw_mode mode)
 {
-	const char *rn, *rn2;
-	struct wpa_supplicant *ifs;
-	u8 bssid[ETH_ALEN];
+	u16 i;
 
-	if (!wpa_s->driver->get_radio_name)
-		return -1;
-
-	rn = wpa_s->driver->get_radio_name(wpa_s->drv_priv);
-	if (rn == NULL || rn[0] == '\0')
-		return -1;
-
-	for (ifs = wpa_s->global->ifaces; ifs; ifs = ifs->next) {
-		if (ifs == wpa_s || !ifs->driver->get_radio_name)
-			continue;
-
-		rn2 = ifs->driver->get_radio_name(ifs->drv_priv);
-		if (!rn2 || os_strcmp(rn, rn2) != 0)
-			continue;
-
-		if (ifs->current_ssid == NULL || ifs->assoc_freq == 0)
-			continue;
-
-		if (ifs->current_ssid->mode == WPAS_MODE_AP ||
-		    ifs->current_ssid->mode == WPAS_MODE_P2P_GO)
-			return ifs->current_ssid->frequency;
-		if (wpa_drv_get_bssid(ifs, bssid) == 0)
-			return ifs->assoc_freq;
+	for (i = 0; i < num_modes; i++) {
+		if (modes[i].mode == mode)
+			return &modes[i];
 	}
 
-	return 0;
+	return NULL;
 }
 
-#endif /* CONFIG_P2P */
+
+static void wpa_setband_scan_freqs_list(struct wpa_supplicant *wpa_s,
+					enum hostapd_hw_mode band,
+					struct wpa_driver_scan_params *params)
+{
+	/* Include only supported channels for the specified band */
+	struct hostapd_hw_modes *mode;
+	int count, i;
+
+	mode = get_mode(wpa_s->hw.modes, wpa_s->hw.num_modes, band);
+	if (mode == NULL) {
+		/* No channels supported in this band - use empty list */
+		params->freqs = os_zalloc(sizeof(int));
+		return;
+	}
+
+	params->freqs = os_zalloc((mode->num_channels + 1) * sizeof(int));
+	if (params->freqs == NULL)
+		return;
+	for (count = 0, i = 0; i < mode->num_channels; i++) {
+		if (mode->channels[i].flag & HOSTAPD_CHAN_DISABLED)
+			continue;
+		params->freqs[count++] = mode->channels[i].freq;
+	}
+}
+
+
+static void wpa_setband_scan_freqs(struct wpa_supplicant *wpa_s,
+				   struct wpa_driver_scan_params *params)
+{
+	if (wpa_s->hw.modes == NULL)
+		return; /* unknown what channels the driver supports */
+	if (params->freqs)
+		return; /* already using a limited channel set */
+	if (wpa_s->setband == WPA_SETBAND_5G)
+		wpa_setband_scan_freqs_list(wpa_s, HOSTAPD_MODE_IEEE80211A,
+					    params);
+	else if (wpa_s->setband == WPA_SETBAND_2G)
+		wpa_setband_scan_freqs_list(wpa_s, HOSTAPD_MODE_IEEE80211G,
+					    params);
+}
 
 
 static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
@@ -530,12 +555,14 @@ static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
 
 	if (wpa_s->wpa_state == WPA_INTERFACE_DISABLED) {
 		wpa_dbg(wpa_s, MSG_DEBUG, "Skip scan - interface disabled");
+		wpas_p2p_continue_after_scan(wpa_s);
 		return;
 	}
 
 	if (wpa_s->disconnected && wpa_s->scan_req == NORMAL_SCAN_REQ) {
 		wpa_dbg(wpa_s, MSG_DEBUG, "Disconnected - do not scan");
 		wpa_supplicant_set_state(wpa_s, WPA_DISCONNECTED);
+		wpas_p2p_continue_after_scan(wpa_s);
 		return;
 	}
 
@@ -543,9 +570,7 @@ static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
 	    wpa_s->scan_req == NORMAL_SCAN_REQ) {
 		wpa_dbg(wpa_s, MSG_DEBUG, "No enabled networks - do not scan");
 		wpa_supplicant_set_state(wpa_s, WPA_INACTIVE);
-#ifdef CONFIG_P2P
-		wpa_s->sta_scan_pending = 0;
-#endif /* CONFIG_P2P */
+		wpas_p2p_continue_after_scan(wpa_s);
 		return;
 	}
 
@@ -563,7 +588,7 @@ static void wpa_supplicant_scan(void *eloop_ctx, void *timeout_ctx)
 	}
 
 #ifdef CONFIG_P2P
-	if (wpas_p2p_in_progress(wpa_s)) {
+	if (wpas_p2p_in_progress(wpa_s) || wpas_wpa_is_in_progress(wpa_s)) {
 		if (wpa_s->sta_scan_pending &&
 		    wpas_p2p_in_progress(wpa_s) == 2 &&
 		    wpa_s->global->p2p_cb_on_scan_complete) {
@@ -734,11 +759,6 @@ ssid_list_set:
 	wpa_supplicant_optimize_freqs(wpa_s, &params);
 	extra_ie = wpa_supplicant_extra_ies(wpa_s);
 
-#ifdef CONFIG_HS20
-	if (wpa_s->conf->hs20 && wpabuf_resize(&extra_ie, 6) == 0)
-		wpas_hs20_add_indication(extra_ie);
-#endif /* CONFIG_HS20 */
-
 	if (params.freqs == NULL && wpa_s->next_scan_freqs) {
 		wpa_dbg(wpa_s, MSG_DEBUG, "Optimize scan based on previously "
 			"generated frequency list");
@@ -746,6 +766,32 @@ ssid_list_set:
 	} else
 		os_free(wpa_s->next_scan_freqs);
 	wpa_s->next_scan_freqs = NULL;
+	wpa_setband_scan_freqs(wpa_s, &params);
+
+	/* See if user specified frequencies. If so, scan only those. */
+	if (wpa_s->conf->freq_list && !params.freqs) {
+		wpa_dbg(wpa_s, MSG_DEBUG,
+			"Optimize scan based on conf->freq_list");
+		int_array_concat(&params.freqs, wpa_s->conf->freq_list);
+	}
+
+	/* Use current associated channel? */
+	if (wpa_s->conf->scan_cur_freq && !params.freqs) {
+		unsigned int num = wpa_s->num_multichan_concurrent;
+
+		params.freqs = os_calloc(num + 1, sizeof(int));
+		if (params.freqs) {
+			num = get_shared_radio_freqs(wpa_s, params.freqs, num);
+			if (num > 0) {
+				wpa_dbg(wpa_s, MSG_DEBUG, "Scan only the "
+					"current operating channels since "
+					"scan_cur_freq is enabled");
+			} else {
+				os_free(params.freqs);
+				params.freqs = NULL;
+			}
+		}
+	}
 
 	params.filter_ssids = wpa_supplicant_build_filter_ssids(
 		wpa_s->conf, &params.num_filter_ssids);
@@ -781,18 +827,19 @@ scan:
 	if (wpa_s->scan_for_connection && scan_req == NORMAL_SCAN_REQ &&
 	    !scan_params->freqs && !params.freqs &&
 	    wpas_is_p2p_prioritized(wpa_s) &&
-	    !(wpa_s->drv_flags & WPA_DRIVER_FLAGS_MULTI_CHANNEL_CONCURRENT) &&
 	    wpa_s->p2p_group_interface == NOT_P2P_GROUP_INTERFACE &&
 	    non_p2p_network_enabled(wpa_s)) {
-		int freq = shared_vif_oper_freq(wpa_s);
-		if (freq > 0) {
-			wpa_dbg(wpa_s, MSG_DEBUG, "P2P: Scan only the current "
-				"operating channel (%d MHz) since driver does "
-				"not support multi-channel concurrency", freq);
-			params.freqs = os_zalloc(sizeof(int) * 2);
-			if (params.freqs)
-				params.freqs[0] = freq;
-			scan_params->freqs = params.freqs;
+		unsigned int num = wpa_s->num_multichan_concurrent;
+
+		params.freqs = os_calloc(num + 1, sizeof(int));
+		if (params.freqs) {
+			num = get_shared_radio_freqs(wpa_s, params.freqs, num);
+			if (num > 0 && num == wpa_s->num_multichan_concurrent) {
+				wpa_dbg(wpa_s, MSG_DEBUG, "Scan only the current operating channels since all channels are already used");
+			} else {
+				os_free(params.freqs);
+				params.freqs = NULL;
+			}
 		}
 	}
 #endif /* CONFIG_P2P */
@@ -1010,7 +1057,9 @@ int wpa_supplicant_req_sched_scan(struct wpa_supplicant *wpa_s)
 
 	if (!ssid || !wpa_s->prev_sched_ssid) {
 		wpa_dbg(wpa_s, MSG_DEBUG, "Beginning of SSID list");
-
+		if (wpa_s->conf->sched_scan_interval)
+			wpa_s->sched_scan_interval =
+				wpa_s->conf->sched_scan_interval;
 		if (wpa_s->sched_scan_interval == 0)
 			wpa_s->sched_scan_interval = 10;
 		wpa_s->sched_scan_timeout = max_sched_scan_ssids * 2;
@@ -1097,6 +1146,8 @@ scan:
 			wpa_s->sched_scan_interval);
 	}
 
+	wpa_setband_scan_freqs(wpa_s, scan_params);
+
 	ret = wpa_supplicant_start_sched_scan(wpa_s, scan_params,
 					      wpa_s->sched_scan_interval);
 	wpabuf_free(extra_ie);
@@ -1117,7 +1168,15 @@ scan:
 		wpa_s->first_sched_scan = 0;
 		wpa_s->sched_scan_timeout /= 2;
 		wpa_s->sched_scan_interval *= 2;
+		if (wpa_s->sched_scan_timeout < wpa_s->sched_scan_interval) {
+			wpa_s->sched_scan_interval = 10;
+			wpa_s->sched_scan_timeout = max_sched_scan_ssids * 2;
+		}
 	}
+
+	/* If there is no more ssids, start next time from the beginning */
+	if (!ssid)
+		wpa_s->prev_sched_ssid = NULL;
 
 	return 0;
 }
@@ -1134,6 +1193,24 @@ void wpa_supplicant_cancel_scan(struct wpa_supplicant *wpa_s)
 {
 	wpa_dbg(wpa_s, MSG_DEBUG, "Cancelling scan request");
 	eloop_cancel_timeout(wpa_supplicant_scan, wpa_s, NULL);
+	wpas_p2p_continue_after_scan(wpa_s);
+}
+
+
+/**
+ * wpa_supplicant_cancel_delayed_sched_scan - Stop a delayed scheduled scan
+ * @wpa_s: Pointer to wpa_supplicant data
+ *
+ * This function is used to stop a delayed scheduled scan.
+ */
+void wpa_supplicant_cancel_delayed_sched_scan(struct wpa_supplicant *wpa_s)
+{
+	if (!wpa_s->sched_scan_supported)
+		return;
+
+	wpa_dbg(wpa_s, MSG_DEBUG, "Cancelling delayed sched scan");
+	eloop_cancel_timeout(wpa_supplicant_delayed_sched_scan_timeout,
+			     wpa_s, NULL);
 }
 
 
@@ -1436,15 +1513,17 @@ static void dump_scan_res(struct wpa_scan_results *scan_res)
 		    == WPA_SCAN_LEVEL_DBM) {
 			int snr = r->level - r->noise;
 			wpa_printf(MSG_EXCESSIVE, MACSTR " freq=%d qual=%d "
-				   "noise=%d level=%d snr=%d%s flags=0x%x",
+				   "noise=%d level=%d snr=%d%s flags=0x%x "
+				   "age=%u",
 				   MAC2STR(r->bssid), r->freq, r->qual,
 				   r->noise, r->level, snr,
-				   snr >= GREAT_SNR ? "*" : "", r->flags);
+				   snr >= GREAT_SNR ? "*" : "", r->flags,
+				   r->age);
 		} else {
 			wpa_printf(MSG_EXCESSIVE, MACSTR " freq=%d qual=%d "
-				   "noise=%d level=%d flags=0x%x",
+				   "noise=%d level=%d flags=0x%x age=%u",
 				   MAC2STR(r->bssid), r->freq, r->qual,
-				   r->noise, r->level, r->flags);
+				   r->noise, r->level, r->flags, r->age);
 		}
 		pos = (u8 *) (r + 1);
 		if (r->ie_len)
@@ -1535,6 +1614,13 @@ wpa_supplicant_get_scan_results(struct wpa_supplicant *wpa_s,
 		wpa_dbg(wpa_s, MSG_DEBUG, "Failed to get scan results");
 		return NULL;
 	}
+	if (scan_res->fetch_time.sec == 0) {
+		/*
+		 * Make sure we have a valid timestamp if the driver wrapper
+		 * does not set this.
+		 */
+		os_get_time(&scan_res->fetch_time);
+	}
 	filter_scan_res(wpa_s, scan_res);
 
 #ifdef CONFIG_WPS
@@ -1551,7 +1637,8 @@ wpa_supplicant_get_scan_results(struct wpa_supplicant *wpa_s,
 
 	wpa_bss_update_start(wpa_s);
 	for (i = 0; i < scan_res->num; i++)
-		wpa_bss_update_scan_res(wpa_s, scan_res->res[i]);
+		wpa_bss_update_scan_res(wpa_s, scan_res->res[i],
+					&scan_res->fetch_time);
 	wpa_bss_update_end(wpa_s, info, new_scan);
 
 	return scan_res;
@@ -1579,4 +1666,23 @@ int wpa_supplicant_update_scan_results(struct wpa_supplicant *wpa_s)
 	wpa_scan_results_free(scan_res);
 
 	return 0;
+}
+
+
+/**
+ * scan_only_handler - Reports scan results
+ */
+void scan_only_handler(struct wpa_supplicant *wpa_s,
+		       struct wpa_scan_results *scan_res)
+{
+	wpa_dbg(wpa_s, MSG_DEBUG, "Scan-only results received");
+	wpa_msg_ctrl(wpa_s, MSG_INFO, WPA_EVENT_SCAN_RESULTS);
+	wpas_notify_scan_results(wpa_s);
+	wpas_notify_scan_done(wpa_s, 1);
+}
+
+
+int wpas_scan_scheduled(struct wpa_supplicant *wpa_s)
+{
+	return eloop_is_timeout_registered(wpa_supplicant_scan, wpa_s, NULL);
 }

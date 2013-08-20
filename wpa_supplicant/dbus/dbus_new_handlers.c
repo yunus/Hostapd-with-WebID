@@ -1479,6 +1479,7 @@ DBusMessage * wpas_dbus_handler_remove_network(DBusMessage *message,
 	char *iface = NULL, *net_id = NULL;
 	int id;
 	struct wpa_ssid *ssid;
+	int was_disabled;
 
 	dbus_message_get_args(message, NULL, DBUS_TYPE_OBJECT_PATH, &op,
 			      DBUS_TYPE_INVALID);
@@ -1505,6 +1506,8 @@ DBusMessage * wpas_dbus_handler_remove_network(DBusMessage *message,
 		goto out;
 	}
 
+	was_disabled = ssid->disabled;
+
 	wpas_notify_network_removed(wpa_s, ssid);
 
 	if (wpa_config_remove_network(wpa_s->conf, id) < 0) {
@@ -1520,6 +1523,13 @@ DBusMessage * wpas_dbus_handler_remove_network(DBusMessage *message,
 	if (ssid == wpa_s->current_ssid)
 		wpa_supplicant_deauthenticate(wpa_s,
 					      WLAN_REASON_DEAUTH_LEAVING);
+	else if (!was_disabled && wpa_s->sched_scanning) {
+		wpa_printf(MSG_DEBUG, "Stop ongoing sched_scan to remove "
+			   "network from filters");
+		wpa_supplicant_cancel_sched_scan(wpa_s);
+		wpa_supplicant_req_scan(wpa_s, 0, 0);
+	}
+
 
 out:
 	os_free(iface);
@@ -1559,6 +1569,9 @@ static void remove_network(void *arg, struct wpa_ssid *ssid)
 DBusMessage * wpas_dbus_handler_remove_all_networks(
 	DBusMessage *message, struct wpa_supplicant *wpa_s)
 {
+	if (wpa_s->sched_scanning)
+		wpa_supplicant_cancel_sched_scan(wpa_s);
+
 	/* NB: could check for failure and return an error */
 	wpa_config_foreach_network(wpa_s->conf, remove_network, wpa_s);
 	return NULL;
@@ -1682,6 +1695,8 @@ out:
 #endif /* IEEE8021X_EAPOL */
 }
 
+
+#ifndef CONFIG_NO_CONFIG_BLOBS
 
 /**
  * wpas_dbus_handler_add_blob - Store named binary blob (ie, for certificates)
@@ -1847,6 +1862,9 @@ DBusMessage * wpas_dbus_handler_remove_blob(DBusMessage *message,
 
 }
 
+#endif /* CONFIG_NO_CONFIG_BLOBS */
+
+
 /*
  * wpas_dbus_handler_flush_bss - Flush the BSS cache
  * @message: Pointer to incoming dbus message
@@ -1918,6 +1936,38 @@ DBusMessage * wpas_dbus_handler_autoscan(DBusMessage *message,
 	return reply;
 }
 #endif /* CONFIG_AUTOSCAN */
+
+
+/*
+ * wpas_dbus_handler_eap_logoff - IEEE 802.1X EAPOL state machine logoff
+ * @message: Pointer to incoming dbus message
+ * @wpa_s: wpa_supplicant structure for a network interface
+ * Returns: NULL
+ *
+ * Handler function for "EAPLogoff" method call of network interface.
+ */
+DBusMessage * wpas_dbus_handler_eap_logoff(DBusMessage *message,
+					   struct wpa_supplicant *wpa_s)
+{
+	eapol_sm_notify_logoff(wpa_s->eapol, TRUE);
+	return NULL;
+}
+
+
+/*
+ * wpas_dbus_handler_eap_logon - IEEE 802.1X EAPOL state machine logon
+ * @message: Pointer to incoming dbus message
+ * @wpa_s: wpa_supplicant structure for a network interface
+ * Returns: NULL
+ *
+ * Handler function for "EAPLogin" method call of network interface.
+ */
+DBusMessage * wpas_dbus_handler_eap_logon(DBusMessage *message,
+					  struct wpa_supplicant *wpa_s)
+{
+	eapol_sm_notify_logoff(wpa_s->eapol, FALSE);
+	return NULL;
+}
 
 
 /**

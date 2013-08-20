@@ -178,10 +178,17 @@ static int wpa_config_parse_int(const struct parse_data *data,
 				struct wpa_ssid *ssid,
 				int line, const char *value)
 {
-	int *dst;
+	int val, *dst;
+	char *end;
 
 	dst = (int *) (((u8 *) ssid) + (long) data->param1);
-	*dst = atoi(value);
+	val = strtol(value, &end, 0);
+	if (*end) {
+		wpa_printf(MSG_ERROR, "Line %d: invalid number \"%s\"",
+			   line, value);
+		return -1;
+	}
+	*dst = val;
 	wpa_printf(MSG_MSGDUMP, "%s=%d (0x%x)", data->name, *dst, *dst);
 
 	if (data->param3 && *dst < (long) data->param3) {
@@ -315,11 +322,9 @@ static int wpa_config_parse_psk(const struct parse_data *data,
 			return 0;
 		ssid->psk_set = 0;
 		os_free(ssid->passphrase);
-		ssid->passphrase = os_malloc(len + 1);
+		ssid->passphrase = dup_binstr(value, len);
 		if (ssid->passphrase == NULL)
 			return -1;
-		os_memcpy(ssid->passphrase, value, len);
-		ssid->passphrase[len] = '\0';
 		return 0;
 #else /* CONFIG_NO_PBKDF2 */
 		wpa_printf(MSG_ERROR, "Line %d: ASCII passphrase not "
@@ -1517,6 +1522,7 @@ static const struct parse_data ssid_fields[] = {
 	{ INT(eap_workaround) },
 	{ STRe(pac_file) },
 	{ INTe(fragment_size) },
+	{ INTe(ocsp) },
 #endif /* IEEE8021X_EAPOL */
 	{ INT_RANGE(mode, 0, 4) },
 	{ INT_RANGE(proactive_key_caching, 0, 1) },
@@ -1543,8 +1549,30 @@ static const struct parse_data ssid_fields[] = {
 	{ INT_RANGE(ampdu_density, -1, 7) },
 	{ STR(ht_mcs) },
 #endif /* CONFIG_HT_OVERRIDES */
+#ifdef CONFIG_VHT_OVERRIDES
+	{ INT_RANGE(disable_vht, 0, 1) },
+	{ INT(vht_capa) },
+	{ INT(vht_capa_mask) },
+	{ INT_RANGE(vht_rx_mcs_nss_1, -1, 3) },
+	{ INT_RANGE(vht_rx_mcs_nss_2, -1, 3) },
+	{ INT_RANGE(vht_rx_mcs_nss_3, -1, 3) },
+	{ INT_RANGE(vht_rx_mcs_nss_4, -1, 3) },
+	{ INT_RANGE(vht_rx_mcs_nss_5, -1, 3) },
+	{ INT_RANGE(vht_rx_mcs_nss_6, -1, 3) },
+	{ INT_RANGE(vht_rx_mcs_nss_7, -1, 3) },
+	{ INT_RANGE(vht_rx_mcs_nss_8, -1, 3) },
+	{ INT_RANGE(vht_tx_mcs_nss_1, -1, 3) },
+	{ INT_RANGE(vht_tx_mcs_nss_2, -1, 3) },
+	{ INT_RANGE(vht_tx_mcs_nss_3, -1, 3) },
+	{ INT_RANGE(vht_tx_mcs_nss_4, -1, 3) },
+	{ INT_RANGE(vht_tx_mcs_nss_5, -1, 3) },
+	{ INT_RANGE(vht_tx_mcs_nss_6, -1, 3) },
+	{ INT_RANGE(vht_tx_mcs_nss_7, -1, 3) },
+	{ INT_RANGE(vht_tx_mcs_nss_8, -1, 3) },
+#endif /* CONFIG_VHT_OVERRIDES */
 	{ INT(ap_max_inactivity) },
 	{ INT(dtim_period) },
+	{ INT(beacon_int) },
 };
 
 #undef OFFSET
@@ -1799,11 +1827,13 @@ void wpa_config_free(struct wpa_config *config)
 	os_free(config->pssid);
 	os_free(config->p2p_pref_chan);
 	os_free(config->autoscan);
+	os_free(config->freq_list);
 	wpabuf_free(config->wps_nfc_dh_pubkey);
 	wpabuf_free(config->wps_nfc_dh_privkey);
 	wpabuf_free(config->wps_nfc_dev_pw);
 	os_free(config->ext_password_backend);
 	os_free(config->sae_groups);
+	wpabuf_free(config->ap_vendor_elements);
 	os_free(config);
 }
 
@@ -1945,6 +1975,24 @@ void wpa_config_set_network_defaults(struct wpa_ssid *ssid)
 	ssid->ampdu_factor = DEFAULT_AMPDU_FACTOR;
 	ssid->ampdu_density = DEFAULT_AMPDU_DENSITY;
 #endif /* CONFIG_HT_OVERRIDES */
+#ifdef CONFIG_VHT_OVERRIDES
+	ssid->vht_rx_mcs_nss_1 = -1;
+	ssid->vht_rx_mcs_nss_2 = -1;
+	ssid->vht_rx_mcs_nss_3 = -1;
+	ssid->vht_rx_mcs_nss_4 = -1;
+	ssid->vht_rx_mcs_nss_5 = -1;
+	ssid->vht_rx_mcs_nss_6 = -1;
+	ssid->vht_rx_mcs_nss_7 = -1;
+	ssid->vht_rx_mcs_nss_8 = -1;
+	ssid->vht_tx_mcs_nss_1 = -1;
+	ssid->vht_tx_mcs_nss_2 = -1;
+	ssid->vht_tx_mcs_nss_3 = -1;
+	ssid->vht_tx_mcs_nss_4 = -1;
+	ssid->vht_tx_mcs_nss_5 = -1;
+	ssid->vht_tx_mcs_nss_6 = -1;
+	ssid->vht_tx_mcs_nss_7 = -1;
+	ssid->vht_tx_mcs_nss_8 = -1;
+#endif /* CONFIG_VHT_OVERRIDES */
 	ssid->proactive_key_caching = -1;
 #ifdef CONFIG_IEEE80211W
 	ssid->ieee80211w = MGMT_FRAME_PROTECTION_DEFAULT;
@@ -2537,6 +2585,7 @@ struct wpa_config * wpa_config_alloc_empty(const char *ctrl_interface,
 	config->bss_expiration_scan_count = DEFAULT_BSS_EXPIRATION_SCAN_COUNT;
 	config->max_num_sta = DEFAULT_MAX_NUM_STA;
 	config->access_network_type = DEFAULT_ACCESS_NETWORK_TYPE;
+	config->scan_cur_freq = DEFAULT_SCAN_CUR_FREQ;
 	config->wmm_ac_params[0] = ac_be;
 	config->wmm_ac_params[1] = ac_bk;
 	config->wmm_ac_params[2] = ac_vi;
@@ -2589,9 +2638,18 @@ static int wpa_global_config_parse_int(const struct global_parse_data *data,
 				       struct wpa_config *config, int line,
 				       const char *pos)
 {
-	int *dst;
+	int val, *dst;
+	char *end;
+
 	dst = (int *) (((u8 *) config) + (long) data->param1);
-	*dst = atoi(pos);
+	val = strtol(pos, &end, 0);
+	if (*end) {
+		wpa_printf(MSG_ERROR, "Line %d: invalid number \"%s\"",
+			   line, pos);
+		return -1;
+	}
+	*dst = val;
+
 	wpa_printf(MSG_DEBUG, "%s=%d", data->name, *dst);
 
 	if (data->param2 && *dst < (long) data->param2) {
@@ -2674,6 +2732,21 @@ static int wpa_global_config_parse_bin(const struct global_parse_data *data,
 	*dst = tmp;
 	wpa_printf(MSG_DEBUG, "%s", data->name);
 
+	return 0;
+}
+
+
+static int wpa_config_process_freq_list(const struct global_parse_data *data,
+					struct wpa_config *config, int line,
+					const char *value)
+{
+	int *freqs;
+
+	freqs = wpa_config_parse_int_array(value);
+	if (freqs == NULL)
+		return -1;
+	os_free(config->freq_list);
+	config->freq_list = freqs;
 	return 0;
 }
 
@@ -2897,6 +2970,43 @@ static int wpa_config_process_sae_groups(
 }
 
 
+static int wpa_config_process_ap_vendor_elements(
+	const struct global_parse_data *data,
+	struct wpa_config *config, int line, const char *pos)
+{
+	struct wpabuf *tmp;
+	int len = os_strlen(pos) / 2;
+	u8 *p;
+
+	if (!len) {
+		wpa_printf(MSG_ERROR, "Line %d: invalid ap_vendor_elements",
+			   line);
+		return -1;
+	}
+
+	tmp = wpabuf_alloc(len);
+	if (tmp) {
+		p = wpabuf_put(tmp, len);
+
+		if (hexstr2bin(pos, p, len)) {
+			wpa_printf(MSG_ERROR, "Line %d: invalid "
+				   "ap_vendor_elements", line);
+			wpabuf_free(tmp);
+			return -1;
+		}
+
+		wpabuf_free(config->ap_vendor_elements);
+		config->ap_vendor_elements = tmp;
+	} else {
+		wpa_printf(MSG_ERROR, "Cannot allocate memory for "
+			   "ap_vendor_elements");
+		return -1;
+	}
+
+	return 0;
+}
+
+
 #ifdef OFFSET
 #undef OFFSET
 #endif /* OFFSET */
@@ -2963,6 +3073,7 @@ static const struct global_parse_data global_fields[] = {
 	{ INT(p2p_go_ht40), 0 },
 	{ INT(p2p_disabled), 0 },
 	{ INT(p2p_no_group_iface), 0 },
+	{ INT_RANGE(p2p_ignore_shared_freq, 0, 1), 0 },
 #endif /* CONFIG_P2P */
 	{ FUNC(country), CFG_CHANGED_COUNTRY },
 	{ INT(bss_max_count), 0 },
@@ -2980,16 +3091,24 @@ static const struct global_parse_data global_fields[] = {
 	{ INT_RANGE(access_network_type, 0, 15), 0 },
 	{ INT_RANGE(pbc_in_m1, 0, 1), 0 },
 	{ STR(autoscan), 0 },
-	{ INT_RANGE(wps_nfc_dev_pw_id, 0x10, 0xffff), 0 },
-	{ BIN(wps_nfc_dh_pubkey), 0 },
-	{ BIN(wps_nfc_dh_privkey), 0 },
-	{ BIN(wps_nfc_dev_pw), 0 },
+	{ INT_RANGE(wps_nfc_dev_pw_id, 0x10, 0xffff),
+	  CFG_CHANGED_NFC_PASSWORD_TOKEN },
+	{ BIN(wps_nfc_dh_pubkey), CFG_CHANGED_NFC_PASSWORD_TOKEN },
+	{ BIN(wps_nfc_dh_privkey), CFG_CHANGED_NFC_PASSWORD_TOKEN },
+	{ BIN(wps_nfc_dev_pw), CFG_CHANGED_NFC_PASSWORD_TOKEN },
 	{ STR(ext_password_backend), CFG_CHANGED_EXT_PW_BACKEND },
 	{ INT(p2p_go_max_inactivity), 0 },
 	{ INT_RANGE(auto_interworking, 0, 1), 0 },
 	{ INT(okc), 0 },
 	{ INT(pmf), 0 },
 	{ FUNC(sae_groups), 0 },
+	{ INT(dtim_period), 0 },
+	{ INT(beacon_int), 0 },
+	{ FUNC(ap_vendor_elements), 0 },
+	{ INT_RANGE(ignore_old_scan_res, 0, 1), 0 },
+	{ FUNC(freq_list), 0 },
+	{ INT(scan_cur_freq), 0 },
+	{ INT(sched_scan_interval), 0 },
 };
 
 #undef FUNC
@@ -3020,6 +3139,8 @@ int wpa_config_process_global(struct wpa_config *config, char *pos, int line)
 				   "parse '%s'.", line, pos);
 			ret = -1;
 		}
+		if (field->changed_flag == CFG_CHANGED_NFC_PASSWORD_TOKEN)
+			config->wps_nfc_pw_from_config = 1;
 		config->changed_parameters |= field->changed_flag;
 		break;
 	}

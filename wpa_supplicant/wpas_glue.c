@@ -437,6 +437,13 @@ static int wpa_supplicant_set_key(void *_wpa_s, enum wpa_alg alg,
 		/* Clear the MIC error counter when setting a new PTK. */
 		wpa_s->mic_errors_seen = 0;
 	}
+#ifdef CONFIG_TESTING_GET_GTK
+	if (key_idx > 0 && addr && is_broadcast_ether_addr(addr) &&
+	    alg != WPA_ALG_NONE && key_len <= sizeof(wpa_s->last_gtk)) {
+		os_memcpy(wpa_s->last_gtk, key, key_len);
+		wpa_s->last_gtk_len = key_len;
+	}
+#endif /* CONFIG_TESTING_GET_GTK */
 	return wpa_drv_set_key(wpa_s, alg, addr, key_idx, set_tx, seq, seq_len,
 			       key, key_len);
 }
@@ -506,8 +513,6 @@ static int wpa_supplicant_mark_authenticated(void *ctx, const u8 *target_ap)
 }
 #endif /* CONFIG_IEEE80211R */
 
-#endif /* CONFIG_NO_WPA */
-
 
 #ifdef CONFIG_TDLS
 
@@ -551,26 +556,45 @@ static int wpa_supplicant_tdls_oper(void *ctx, int oper, const u8 *peer)
 
 
 static int wpa_supplicant_tdls_peer_addset(
-	void *ctx, const u8 *peer, int add, u16 capability,
-	const u8 *supp_rates, size_t supp_rates_len)
+	void *ctx, const u8 *peer, int add, u16 aid, u16 capability,
+	const u8 *supp_rates, size_t supp_rates_len,
+	const struct ieee80211_ht_capabilities *ht_capab,
+	const struct ieee80211_vht_capabilities *vht_capab,
+	u8 qosinfo, const u8 *ext_capab, size_t ext_capab_len)
 {
 	struct wpa_supplicant *wpa_s = ctx;
 	struct hostapd_sta_add_params params;
 
+	os_memset(&params, 0, sizeof(params));
+
 	params.addr = peer;
-	params.aid = 1;
+	params.aid = aid;
 	params.capability = capability;
 	params.flags = WPA_STA_TDLS_PEER | WPA_STA_AUTHORIZED;
-	params.ht_capabilities = NULL;
+
+	/*
+	 * TDLS Setup frames do not contain WMM IEs, hence need to depend on
+	 * qosinfo to check if the peer is WMM capable.
+	 */
+	if (qosinfo)
+		params.flags |= WPA_STA_WMM;
+
+	params.ht_capabilities = ht_capab;
+	params.vht_capabilities = vht_capab;
+	params.qosinfo = qosinfo;
 	params.listen_interval = 0;
 	params.supp_rates = supp_rates;
 	params.supp_rates_len = supp_rates_len;
 	params.set = !add;
+	params.ext_capab = ext_capab;
+	params.ext_capab_len = ext_capab_len;
 
 	return wpa_drv_sta_add(wpa_s, &params);
 }
 
 #endif /* CONFIG_TDLS */
+
+#endif /* CONFIG_NO_WPA */
 
 
 enum wpa_ctrl_req_type wpa_supplicant_ctrl_req_from_string(const char *field)
@@ -781,8 +805,10 @@ int wpa_supplicant_init_eapol(struct wpa_supplicant *wpa_s)
 	ctx->eapol_done_cb = wpa_supplicant_notify_eapol_done;
 	ctx->eapol_send = wpa_supplicant_eapol_send;
 	ctx->set_wep_key = wpa_eapol_set_wep_key;
+#ifndef CONFIG_NO_CONFIG_BLOBS
 	ctx->set_config_blob = wpa_supplicant_set_config_blob;
 	ctx->get_config_blob = wpa_supplicant_get_config_blob;
+#endif /* CONFIG_NO_CONFIG_BLOBS */
 	ctx->aborted_cached = wpa_supplicant_aborted_cached;
 	ctx->opensc_engine_path = wpa_s->conf->opensc_engine_path;
 	ctx->pkcs11_engine_path = wpa_s->conf->pkcs11_engine_path;

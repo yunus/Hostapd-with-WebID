@@ -29,6 +29,7 @@
 #include "ap/wps_hostapd.h"
 #include "ap/ctrl_iface_ap.h"
 #include "ap/ap_drv_ops.h"
+#include "ap/wpa_auth.h"
 #include "wps/wps_defs.h"
 #include "wps/wps.h"
 #include "config_file.h"
@@ -352,6 +353,59 @@ static int hostapd_ctrl_iface_wps_nfc_token(struct hostapd_data *hapd,
 
 	return -1;
 }
+
+
+static int hostapd_ctrl_iface_nfc_get_handover_sel(struct hostapd_data *hapd,
+						   char *cmd, char *reply,
+						   size_t max_len)
+{
+	struct wpabuf *buf;
+	int res;
+	char *pos;
+	int ndef;
+
+	pos = os_strchr(cmd, ' ');
+	if (pos == NULL)
+		return -1;
+	*pos++ = '\0';
+
+	if (os_strcmp(cmd, "WPS") == 0)
+		ndef = 0;
+	else if (os_strcmp(cmd, "NDEF") == 0)
+		ndef = 1;
+	else
+		return -1;
+
+	if (os_strcmp(pos, "WPS-CR") == 0)
+		buf = hostapd_wps_nfc_hs_cr(hapd, ndef);
+	else
+		buf = NULL;
+	if (buf == NULL)
+		return -1;
+
+	res = wpa_snprintf_hex_uppercase(reply, max_len, wpabuf_head(buf),
+					 wpabuf_len(buf));
+	reply[res++] = '\n';
+	reply[res] = '\0';
+
+	wpabuf_free(buf);
+
+	return res;
+}
+
+
+static int hostapd_ctrl_iface_nfc_report_handover(struct hostapd_data *hapd,
+						  char *cmd)
+{
+	/*
+	 * Since NFC connection handover provided full WPS Credential, there is
+	 * no need for additional operations within hostapd. Just report this in
+	 * debug log.
+	 */
+	wpa_printf(MSG_DEBUG, "NFC: Connection handover reported: %s", cmd);
+	return 0;
+}
+
 #endif /* CONFIG_WPS_NFC */
 
 
@@ -484,15 +538,25 @@ static int hostapd_ctrl_iface_ess_disassoc(struct hostapd_data *hapd,
 					   const char *cmd)
 {
 	u8 addr[ETH_ALEN];
-	const char *url;
+	const char *url, *timerstr;
 	u8 buf[1000], *pos;
 	struct ieee80211_mgmt *mgmt;
 	size_t url_len;
+	int disassoc_timer;
 
 	if (hwaddr_aton(cmd, addr))
 		return -1;
-	url = cmd + 17;
-	if (*url != ' ')
+
+	timerstr = cmd + 17;
+	if (*timerstr != ' ')
+		return -1;
+	timerstr++;
+	disassoc_timer = atoi(timerstr);
+	if (disassoc_timer < 0 || disassoc_timer > 65535)
+		return -1;
+
+	url = os_strchr(timerstr, ' ');
+	if (url == NULL)
 		return -1;
 	url++;
 	url_len = os_strlen(url);
@@ -511,8 +575,9 @@ static int hostapd_ctrl_iface_ess_disassoc(struct hostapd_data *hapd,
 	mgmt->u.action.u.bss_tm_req.dialog_token = 1;
 	mgmt->u.action.u.bss_tm_req.req_mode =
 		WNM_BSS_TM_REQ_ESS_DISASSOC_IMMINENT;
-	mgmt->u.action.u.bss_tm_req.disassoc_timer = host_to_le16(0);
-	mgmt->u.action.u.bss_tm_req.validity_interval = 0;
+	mgmt->u.action.u.bss_tm_req.disassoc_timer =
+		host_to_le16(disassoc_timer);
+	mgmt->u.action.u.bss_tm_req.validity_interval = 0x01;
 
 	pos = mgmt->u.action.u.bss_tm_req.variable;
 
@@ -525,6 +590,41 @@ static int hostapd_ctrl_iface_ess_disassoc(struct hostapd_data *hapd,
 		wpa_printf(MSG_DEBUG, "Failed to send BSS Transition "
 			   "Management Request frame");
 		return -1;
+	}
+
+	/* send disassociation frame after time-out */
+	if (disassoc_timer) {
+		struct sta_info *sta;
+		int timeout, beacon_int;
+
+		/*
+		 * Prevent STA from reconnecting using cached PMKSA to force
+		 * full authentication with the authentication server (which may
+		 * decide to reject the connection),
+		 */
+		wpa_auth_pmksa_remove(hapd->wpa_auth, addr);
+
+		sta = ap_get_sta(hapd, addr);
+		if (sta == NULL) {
+			wpa_printf(MSG_DEBUG, "Station " MACSTR " not found "
+				   "for ESS disassociation imminent message",
+				   MAC2STR(addr));
+			return -1;
+		}
+
+		beacon_int = hapd->iconf->beacon_int;
+		if (beacon_int < 1)
+			beacon_int = 100; /* best guess */
+		/* Calculate timeout in ms based on beacon_int in TU */
+		timeout = disassoc_timer * beacon_int * 128 / 125;
+		wpa_printf(MSG_DEBUG, "Disassociation timer for " MACSTR
+			   " set to %d ms", MAC2STR(addr), timeout);
+
+		sta->timeout_next = STA_DISASSOC_FROM_CLI;
+		eloop_cancel_timeout(ap_handle_timer, hapd, sta);
+		eloop_register_timeout(timeout / 1000,
+				       timeout % 1000 * 1000,
+				       ap_handle_timer, hapd, sta);
 	}
 
 	return 0;
@@ -913,6 +1013,12 @@ static void hostapd_ctrl_iface_receive(int sock, void *eloop_ctx,
 	} else if (os_strncmp(buf, "WPS_NFC_TOKEN ", 14) == 0) {
 		reply_len = hostapd_ctrl_iface_wps_nfc_token(
 			hapd, buf + 14, reply, reply_size);
+	} else if (os_strncmp(buf, "NFC_GET_HANDOVER_SEL ", 21) == 0) {
+		reply_len = hostapd_ctrl_iface_nfc_get_handover_sel(
+			hapd, buf + 21, reply, reply_size);
+	} else if (os_strncmp(buf, "NFC_REPORT_HANDOVER ", 20) == 0) {
+		if (hostapd_ctrl_iface_nfc_report_handover(hapd, buf + 20))
+			reply_len = -1;
 #endif /* CONFIG_WPS_NFC */
 #endif /* CONFIG_WPS */
 #ifdef CONFIG_WNM
@@ -976,7 +1082,7 @@ static char * hostapd_ctrl_iface_path(struct hostapd_data *hapd)
 }
 
 
-static void hostapd_ctrl_iface_msg_cb(void *ctx, int level,
+static void hostapd_ctrl_iface_msg_cb(void *ctx, int level, int global,
 				      const char *txt, size_t len)
 {
 	struct hostapd_data *hapd = ctx;
@@ -1013,6 +1119,14 @@ int hostapd_ctrl_iface_init(struct hostapd_data *hapd)
 	if (hapd->conf->ctrl_interface_gid_set &&
 	    chown(hapd->conf->ctrl_interface, -1,
 		  hapd->conf->ctrl_interface_gid) < 0) {
+		perror("chown[ctrl_interface]");
+		return -1;
+	}
+
+	if (!hapd->conf->ctrl_interface_gid_set &&
+	    hapd->iface->interfaces->ctrl_iface_group &&
+	    chown(hapd->conf->ctrl_interface, -1,
+		  hapd->iface->interfaces->ctrl_iface_group) < 0) {
 		perror("chown[ctrl_interface]");
 		return -1;
 	}
@@ -1085,6 +1199,13 @@ int hostapd_ctrl_iface_init(struct hostapd_data *hapd)
 
 	if (hapd->conf->ctrl_interface_gid_set &&
 	    chown(fname, -1, hapd->conf->ctrl_interface_gid) < 0) {
+		perror("chown[ctrl_interface/ifname]");
+		goto fail;
+	}
+
+	if (!hapd->conf->ctrl_interface_gid_set &&
+	    hapd->iface->interfaces->ctrl_iface_group &&
+	    chown(fname, -1, hapd->iface->interfaces->ctrl_iface_group) < 0) {
 		perror("chown[ctrl_interface/ifname]");
 		goto fail;
 	}
@@ -1257,6 +1378,11 @@ int hostapd_global_ctrl_iface_init(struct hapd_interfaces *interface)
 			perror("mkdir[ctrl_interface]");
 			goto fail;
 		}
+	} else if (interface->ctrl_iface_group &&
+		   chown(interface->global_iface_path, -1,
+			 interface->ctrl_iface_group) < 0) {
+		perror("chown[ctrl_interface]");
+		goto fail;
 	}
 
 	if (os_strlen(interface->global_iface_path) + 1 +
@@ -1308,6 +1434,12 @@ int hostapd_global_ctrl_iface_init(struct hapd_interfaces *interface)
 			fname = NULL;
 			goto fail;
 		}
+	}
+
+	if (interface->ctrl_iface_group &&
+	    chown(fname, -1, interface->ctrl_iface_group) < 0) {
+		perror("chown[ctrl_interface]");
+		goto fail;
 	}
 
 	if (chmod(fname, S_IRWXU | S_IRWXG) < 0) {

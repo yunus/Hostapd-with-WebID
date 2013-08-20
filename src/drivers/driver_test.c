@@ -1318,11 +1318,12 @@ static void wpa_driver_test_scan_timeout(void *eloop_ctx, void *timeout_ctx)
 	if (drv->pending_p2p_scan && drv->p2p) {
 #ifdef CONFIG_P2P
 		size_t i;
+		struct os_time now;
+		os_get_time(&now);
 		for (i = 0; i < drv->num_scanres; i++) {
 			struct wpa_scan_res *bss = drv->scanres[i];
 			if (p2p_scan_res_handler(drv->p2p, bss->bssid,
-						 bss->freq, bss->age,
-						 bss->level,
+						 bss->freq, &now, bss->level,
 						 (const u8 *) (bss + 1),
 						 bss->ie_len) > 0)
 				return;
@@ -3194,6 +3195,12 @@ static void test_prov_disc_resp(void *ctx, const u8 *peer, u16 config_methods)
 	/* TODO */
 }
 
+
+static void test_p2p_debug_print(void *ctx, int level, const char *msg)
+{
+	wpa_printf(level, "P2P: %s", msg);
+}
+
 #endif /* CONFIG_P2P */
 
 
@@ -3205,8 +3212,8 @@ static int wpa_driver_test_init_p2p(struct wpa_driver_test_data *drv)
 	int i;
 
 	os_memset(&p2p, 0, sizeof(p2p));
-	p2p.msg_ctx = drv->ctx;
 	p2p.cb_ctx = drv;
+	p2p.debug_print = test_p2p_debug_print;
 	p2p.p2p_scan = test_p2p_scan;
 	p2p.send_action = test_send_action;
 	p2p.send_action_done = test_send_action_done;

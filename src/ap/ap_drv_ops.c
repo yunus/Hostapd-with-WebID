@@ -173,6 +173,14 @@ int hostapd_build_ap_extra_ies(struct hostapd_data *hapd,
 	}
 #endif /* CONFIG_HS20 */
 
+	if (hapd->conf->vendor_elements) {
+		size_t add = wpabuf_len(hapd->conf->vendor_elements);
+		if (wpabuf_resize(&beacon, add) == 0)
+			wpabuf_put_buf(beacon, hapd->conf->vendor_elements);
+		if (wpabuf_resize(&proberesp, add) == 0)
+			wpabuf_put_buf(proberesp, hapd->conf->vendor_elements);
+	}
+
 	*beacon_ret = beacon;
 	*proberesp_ret = proberesp;
 	*assocresp_ret = assocresp;
@@ -288,19 +296,19 @@ int hostapd_vlan_if_remove(struct hostapd_data *hapd, const char *ifname)
 }
 
 
-int hostapd_set_wds_sta(struct hostapd_data *hapd, const u8 *addr, int aid,
-			int val)
+int hostapd_set_wds_sta(struct hostapd_data *hapd, char *ifname_wds,
+			const u8 *addr, int aid, int val)
 {
 	const char *bridge = NULL;
 
 	if (hapd->driver == NULL || hapd->driver->set_wds_sta == NULL)
-		return 0;
+		return -1;
 	if (hapd->conf->wds_bridge[0])
 		bridge = hapd->conf->wds_bridge;
 	else if (hapd->conf->bridge[0])
 		bridge = hapd->conf->bridge;
 	return hapd->driver->set_wds_sta(hapd->drv_priv, addr, aid, val,
-					 bridge);
+					 bridge, ifname_wds);
 }
 
 
