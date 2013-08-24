@@ -567,11 +567,13 @@ static void wpa_supplicant_wps_event_m2d(struct wpa_supplicant *wpa_s,
 }
 
 
-static const char * wps_event_fail_reason[NUM_WPS_EI_VALUES] = {
-	"No Error", /* WPS_EI_NO_ERROR */
-	"TKIP Only Prohibited", /* WPS_EI_SECURITY_TKIP_ONLY_PROHIBITED */
-	"WEP Prohibited" /* WPS_EI_SECURITY_WEP_PROHIBITED */
-};
+static void wpas_wps_clear_timeout(void *eloop_ctx, void *timeout_ctx)
+{
+	struct wpa_supplicant *wpa_s = eloop_ctx;
+	wpa_printf(MSG_DEBUG, "WPS: Clear WPS network from timeout");
+	wpas_clear_wps(wpa_s);
+}
+
 
 static void wpa_supplicant_wps_event_fail(struct wpa_supplicant *wpa_s,
 					  struct wps_event_fail *fail)
@@ -581,13 +583,13 @@ static void wpa_supplicant_wps_event_fail(struct wpa_supplicant *wpa_s,
 		wpa_msg(wpa_s, MSG_INFO,
 			WPS_EVENT_FAIL "msg=%d config_error=%d reason=%d (%s)",
 			fail->msg, fail->config_error, fail->error_indication,
-			wps_event_fail_reason[fail->error_indication]);
+			wps_ei_str(fail->error_indication));
 		if (wpa_s->parent && wpa_s->parent != wpa_s)
 			wpa_msg(wpa_s->parent, MSG_INFO, WPS_EVENT_FAIL
 				"msg=%d config_error=%d reason=%d (%s)",
 				fail->msg, fail->config_error,
 				fail->error_indication,
-				wps_event_fail_reason[fail->error_indication]);
+				wps_ei_str(fail->error_indication));
 	} else {
 		wpa_msg(wpa_s, MSG_INFO,
 			WPS_EVENT_FAIL "msg=%d config_error=%d",
@@ -597,7 +599,14 @@ static void wpa_supplicant_wps_event_fail(struct wpa_supplicant *wpa_s,
 				"msg=%d config_error=%d",
 				fail->msg, fail->config_error);
 	}
-	wpas_clear_wps(wpa_s);
+
+	/*
+	 * Need to allow WPS processing to complete, e.g., by sending WSC_NACK.
+	 */
+	wpa_printf(MSG_DEBUG, "WPS: Register timeout to clear WPS network");
+	eloop_cancel_timeout(wpas_wps_clear_timeout, wpa_s, NULL);
+	eloop_register_timeout(0, 100000, wpas_wps_clear_timeout, wpa_s, NULL);
+
 	wpas_notify_wps_event_fail(wpa_s, fail);
 #ifdef CONFIG_P2P
 	wpas_p2p_wps_failed(wpa_s, fail);
@@ -812,6 +821,12 @@ static void wpa_supplicant_wps_event(void *ctx, enum wps_event event,
 	case WPS_EV_PBC_OVERLAP:
 		break;
 	case WPS_EV_PBC_TIMEOUT:
+		break;
+	case WPS_EV_PBC_ACTIVE:
+		wpa_msg(wpa_s, MSG_INFO, WPS_EVENT_ACTIVE);
+		break;
+	case WPS_EV_PBC_DISABLE:
+		wpa_msg(wpa_s, MSG_INFO, WPS_EVENT_DISABLE);
 		break;
 	case WPS_EV_ER_AP_ADD:
 		wpa_supplicant_wps_event_er_ap_add(wpa_s, &data->ap);
@@ -1385,6 +1400,7 @@ int wpas_wps_init(struct wpa_supplicant *wpa_s)
 void wpas_wps_deinit(struct wpa_supplicant *wpa_s)
 {
 	eloop_cancel_timeout(wpas_wps_timeout, wpa_s, NULL);
+	eloop_cancel_timeout(wpas_wps_clear_timeout, wpa_s, NULL);
 	eloop_cancel_timeout(wpas_wps_reenable_networks_cb, wpa_s, NULL);
 	wpas_wps_clear_ap_info(wpa_s);
 

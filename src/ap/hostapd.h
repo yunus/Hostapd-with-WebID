@@ -67,6 +67,25 @@ struct hostapd_frame_info {
 	int ssi_signal; /* dBm */
 };
 
+enum wps_status {
+	WPS_STATUS_SUCCESS = 1,
+	WPS_STATUS_FAILURE
+};
+
+enum pbc_status {
+	WPS_PBC_STATUS_DISABLE,
+	WPS_PBC_STATUS_ACTIVE,
+	WPS_PBC_STATUS_TIMEOUT,
+	WPS_PBC_STATUS_OVERLAP
+};
+
+struct wps_stat {
+	enum wps_status status;
+	enum wps_error_indication failure_reason;
+	enum pbc_status pbc_status;
+	u8 peer_addr[ETH_ALEN];
+};
+
 
 /**
  * struct hostapd_data - hostapd per-BSS data structure
@@ -147,6 +166,8 @@ struct hostapd_data {
 	unsigned int ap_pin_failures_consecutive;
 	struct upnp_wps_device_sm *wps_upnp;
 	unsigned int ap_pin_lockout_time;
+
+	struct wps_stat wps_stats;
 #endif /* CONFIG_WPS */
 
 	struct hostapd_probereq_cb *probereq_cb;
