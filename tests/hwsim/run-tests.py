@@ -12,6 +12,7 @@ import sys
 import time
 
 import logging
+logger = logging.getLogger(__name__)
 
 from wpasupplicant import WpaSupplicant
 from hostapd import HostapdGlobal
@@ -19,13 +20,17 @@ from hostapd import HostapdGlobal
 def reset_devs(dev, apdev):
     hapd = HostapdGlobal()
     for d in dev:
-        d.reset()
+        try:
+            d.reset()
+        except Exception, e:
+            logger.info("Failed to reset device " + d.ifname)
     for ap in apdev:
         hapd.remove(ap['ifname'])
 
 def main():
     test_file = None
     error_file = None
+    log_file = None
     idx = 1
     if len(sys.argv) > 1 and sys.argv[1] == '-d':
         logging.basicConfig(level=logging.DEBUG)
@@ -33,6 +38,10 @@ def main():
     elif len(sys.argv) > 1 and sys.argv[1] == '-q':
         logging.basicConfig(level=logging.WARNING)
         idx = idx + 1
+    elif len(sys.argv) > 2 and sys.argv[1] == '-l':
+        log_file = sys.argv[2]
+        logging.basicConfig(filename=log_file,level=logging.DEBUG)
+        idx = idx + 2
     else:
         logging.basicConfig(level=logging.INFO)
 
@@ -59,11 +68,11 @@ def main():
 
     for d in dev:
         if not d.ping():
-            print d.ifname + ": No response from wpa_supplicant"
+            logger.info(d.ifname + ": No response from wpa_supplicant")
             return
-        print "DEV: " + d.ifname + ": " + d.p2p_dev_addr()
+        logger.info("DEV: " + d.ifname + ": " + d.p2p_dev_addr())
     for ap in apdev:
-        print "APDEV: " + ap['ifname']
+        logger.info("APDEV: " + ap['ifname'])
 
     tests = []
     for t in os.listdir("."):
@@ -71,7 +80,7 @@ def main():
         if m:
             if test_file and test_file not in t:
                 continue
-            print "Import test cases from " + t
+            logger.info("Import test cases from " + t)
             mod = __import__(m.group(1))
             for s in dir(mod):
                 if s.startswith("test_"):
@@ -86,38 +95,53 @@ def main():
             if test_filter != t.__name__:
                 continue
         reset_devs(dev, apdev)
-        print "START " + t.__name__
+        logger.info("START " + t.__name__)
+        if log_file:
+            print "START " + t.__name__
         if t.__doc__:
-            print "Test: " + t.__doc__
+            logger.info("Test: " + t.__doc__)
         for d in dev:
-            d.request("NOTE TEST-START " + t.__name__)
+            try:
+                d.request("NOTE TEST-START " + t.__name__)
+            except Exception, e:
+                logger.info("Failed to issue TEST-START before " + t.__name__ + " for " + d.ifname)
+                logger.info(e)
         try:
             if t.func_code.co_argcount > 1:
                 t(dev, apdev)
             else:
                 t(dev)
             passed.append(t.__name__)
-            print "PASS " + t.__name__
+            logger.info("PASS " + t.__name__)
+            if log_file:
+                print "PASS " + t.__name__
         except Exception, e:
-            print e
+            logger.info(e)
             failed.append(t.__name__)
-            print "FAIL " + t.__name__
+            logger.info("FAIL " + t.__name__)
+            if log_file:
+                print "FAIL " + t.__name__
         for d in dev:
-            d.request("NOTE TEST-STOP " + t.__name__)
+            try:
+                d.request("NOTE TEST-STOP " + t.__name__)
+            except Exception, e:
+                logger.info("Failed to issue TEST-STOP after " + t.__name__ + " for " + d.ifname)
+                logger.info(e)
 
     if not test_filter:
         reset_devs(dev, apdev)
 
-    print
     if len(failed):
-        print "passed " + str(len(passed)) + " test case(s)"
-        print "failed tests: " + str(failed)
+        logger.info("passed " + str(len(passed)) + " test case(s)")
+        logger.info("failed tests: " + str(failed))
         if error_file:
             f = open(error_file, 'w')
             f.write(str(failed) + '\n')
             f.close()
         sys.exit(1)
-    print "passed all " + str(len(passed)) + " test case(s)"
+    logger.info("passed all " + str(len(passed)) + " test case(s)")
+    if log_file:
+        print "passed all " + str(len(passed)) + " test case(s)"
 
 if __name__ == "__main__":
     main()

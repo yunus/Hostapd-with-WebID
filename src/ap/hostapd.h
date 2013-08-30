@@ -47,6 +47,11 @@ struct hapd_interfaces {
 	struct hostapd_dynamic_iface **dynamic_iface;
 };
 
+enum hostapd_chan_status {
+	HOSTAPD_CHAN_VALID = 0, /* channel is ready */
+	HOSTAPD_CHAN_INVALID = 1, /* no usable channel found */
+	HOSTAPD_CHAN_ACS = 2, /* ACS work being performed */
+};
 
 struct hostapd_probereq_cb {
 	int (*cb)(void *ctx, const u8 *sa, const u8 *da, const u8 *bssid,
@@ -296,6 +301,15 @@ struct hostapd_iface {
 	int olbc_ht;
 
 	u16 ht_op_mode;
+
+	/* surveying helpers */
+
+	/* number of channels surveyed */
+	unsigned int chans_surveyed;
+
+	/* lowest observed noise floor in dBm */
+	s8 lowest_nf;
+
 	void (*scan_cb)(struct hostapd_iface *iface);
 };
 

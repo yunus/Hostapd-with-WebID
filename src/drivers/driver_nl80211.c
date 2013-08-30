@@ -197,6 +197,7 @@ struct i802_bss {
 	u8 addr[ETH_ALEN];
 
 	int freq;
+	int if_dynamic;
 
 	void *ctx;
 	struct nl_handle *nl_preq, *nl_mgmt;
@@ -351,6 +352,8 @@ static int nl80211_disable_11b_rates(struct wpa_driver_nl80211_data *drv,
 static int nl80211_leave_ibss(struct wpa_driver_nl80211_data *drv);
 static int wpa_driver_nl80211_authenticate_retry(
 	struct wpa_driver_nl80211_data *drv);
+
+static int i802_set_iface_flags(struct i802_bss *bss, int up);
 
 
 static const char * nl80211_command_to_string(enum nl80211_commands cmd)
@@ -3493,8 +3496,7 @@ static void wpa_driver_nl80211_rfkill_unblocked(void *ctx)
 {
 	struct wpa_driver_nl80211_data *drv = ctx;
 	wpa_printf(MSG_DEBUG, "nl80211: RFKILL unblocked");
-	if (linux_set_iface_flags(drv->global->ioctl_sock,
-				  drv->first_bss.ifname, 1)) {
+	if (i802_set_iface_flags(&drv->first_bss, 1)) {
 		wpa_printf(MSG_DEBUG, "nl80211: Could not set interface UP "
 			   "after rfkill unblock");
 		return;
@@ -4012,15 +4014,14 @@ wpa_driver_nl80211_finish_drv_init(struct wpa_driver_nl80211_data *drv)
 #endif /* HOSTAPD */
 	struct i802_bss *bss = &drv->first_bss;
 	int send_rfkill_event = 0;
-	int dynamic_if;
 
 	drv->ifindex = if_nametoindex(bss->ifname);
 	bss->ifindex = drv->ifindex;
 	bss->wdev_id = drv->global->if_add_wdevid;
 	bss->wdev_id_set = drv->global->if_add_wdevid_set;
 
-	dynamic_if = drv->ifindex == drv->global->if_add_ifindex;
-	dynamic_if = dynamic_if || drv->global->if_add_wdevid_set;
+	bss->if_dynamic = drv->ifindex == drv->global->if_add_ifindex;
+	bss->if_dynamic = bss->if_dynamic || drv->global->if_add_wdevid_set;
 	drv->global->if_add_wdevid_set = 0;
 
 	if (wpa_driver_nl80211_capa(drv))
@@ -4030,7 +4031,7 @@ wpa_driver_nl80211_finish_drv_init(struct wpa_driver_nl80211_data *drv)
 		   bss->ifname, drv->phyname);
 
 #ifndef HOSTAPD
-	if (dynamic_if)
+	if (bss->if_dynamic)
 		nlmode = nl80211_get_ifmode(bss);
 
 	/*
@@ -4169,6 +4170,7 @@ static void wpa_driver_nl80211_deinit(struct i802_bss *bss)
 	(void) i802_set_iface_flags(bss, 0);
 	if (drv->nlmode != NL80211_IFTYPE_P2P_DEVICE) {
 		wpa_driver_nl80211_set_mode(bss, NL80211_IFTYPE_STATION);
+		nl80211_mgmt_unsubscribe(bss, "deinit");
 	} else {
 		nl80211_mgmt_unsubscribe(bss, "deinit");
 		nl80211_del_p2pdev(bss);
@@ -9539,6 +9541,14 @@ static int wpa_driver_nl80211_deinit_ap(void *priv)
 	if (!is_ap_interface(drv->nlmode))
 		return -1;
 	wpa_driver_nl80211_del_beacon(drv);
+
+	/*
+	 * If the P2P GO interface was dynamically added, then it is
+	 * possible that the interface change to station is not possible.
+	 */
+	if (drv->nlmode == NL80211_IFTYPE_P2P_GO && bss->if_dynamic)
+		return 0;
+
 	return wpa_driver_nl80211_set_mode(priv, NL80211_IFTYPE_STATION);
 }
 
@@ -9561,6 +9571,14 @@ static int wpa_driver_nl80211_deinit_p2p_cli(void *priv)
 	struct wpa_driver_nl80211_data *drv = bss->drv;
 	if (drv->nlmode != NL80211_IFTYPE_P2P_CLIENT)
 		return -1;
+
+	/*
+	 * If the P2P Client interface was dynamically added, then it is
+	 * possible that the interface change to station is not possible.
+	 */
+	if (bss->if_dynamic)
+		return 0;
+
 	return wpa_driver_nl80211_set_mode(priv, NL80211_IFTYPE_STATION);
 }
 
@@ -9950,6 +9968,185 @@ static int nl80211_flush_pmkid(void *priv)
 	struct i802_bss *bss = priv;
 	wpa_printf(MSG_DEBUG, "nl80211: Flush PMKIDs");
 	return nl80211_pmkid(bss, NL80211_CMD_FLUSH_PMKSA, NULL, NULL);
+}
+
+
+static void clean_survey_results(struct survey_results *survey_results)
+{
+	struct freq_survey *survey, *tmp;
+
+	if (dl_list_empty(&survey_results->survey_list))
+		return;
+
+	dl_list_for_each_safe(survey, tmp, &survey_results->survey_list,
+			      struct freq_survey, list) {
+		dl_list_del(&survey->list);
+		os_free(survey);
+	}
+}
+
+
+static void add_survey(struct nlattr **sinfo, u32 ifidx,
+		       struct dl_list *survey_list)
+{
+	struct freq_survey *survey;
+
+	survey = os_zalloc(sizeof(struct freq_survey));
+	if  (!survey)
+		return;
+
+	survey->ifidx = ifidx;
+	survey->freq = nla_get_u32(sinfo[NL80211_SURVEY_INFO_FREQUENCY]);
+	survey->filled = 0;
+
+	if (sinfo[NL80211_SURVEY_INFO_NOISE]) {
+		survey->nf = (int8_t)
+			nla_get_u8(sinfo[NL80211_SURVEY_INFO_NOISE]);
+		survey->filled |= SURVEY_HAS_NF;
+	}
+
+	if (sinfo[NL80211_SURVEY_INFO_CHANNEL_TIME]) {
+		survey->channel_time =
+			nla_get_u64(sinfo[NL80211_SURVEY_INFO_CHANNEL_TIME]);
+		survey->filled |= SURVEY_HAS_CHAN_TIME;
+	}
+
+	if (sinfo[NL80211_SURVEY_INFO_CHANNEL_TIME_BUSY]) {
+		survey->channel_time_busy =
+			nla_get_u64(sinfo[NL80211_SURVEY_INFO_CHANNEL_TIME_BUSY]);
+		survey->filled |= SURVEY_HAS_CHAN_TIME_BUSY;
+	}
+
+	if (sinfo[NL80211_SURVEY_INFO_CHANNEL_TIME_RX]) {
+		survey->channel_time_rx =
+			nla_get_u64(sinfo[NL80211_SURVEY_INFO_CHANNEL_TIME_RX]);
+		survey->filled |= SURVEY_HAS_CHAN_TIME_RX;
+	}
+
+	if (sinfo[NL80211_SURVEY_INFO_CHANNEL_TIME_TX]) {
+		survey->channel_time_tx =
+			nla_get_u64(sinfo[NL80211_SURVEY_INFO_CHANNEL_TIME_TX]);
+		survey->filled |= SURVEY_HAS_CHAN_TIME_TX;
+	}
+
+	wpa_printf(MSG_DEBUG, "nl80211: Freq survey dump event (freq=%d MHz noise=%d channel_time=%ld busy_time=%ld tx_time=%ld rx_time=%ld filled=%04x)",
+		   survey->freq,
+		   survey->nf,
+		   (unsigned long int) survey->channel_time,
+		   (unsigned long int) survey->channel_time_busy,
+		   (unsigned long int) survey->channel_time_tx,
+		   (unsigned long int) survey->channel_time_rx,
+		   survey->filled);
+
+	dl_list_add_tail(survey_list, &survey->list);
+}
+
+
+static int check_survey_ok(struct nlattr **sinfo, u32 surveyed_freq,
+			   unsigned int freq_filter)
+{
+	if (!freq_filter)
+		return 1;
+
+	return freq_filter == surveyed_freq;
+}
+
+
+static int survey_handler(struct nl_msg *msg, void *arg)
+{
+	struct nlattr *tb[NL80211_ATTR_MAX + 1];
+	struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
+	struct nlattr *sinfo[NL80211_SURVEY_INFO_MAX + 1];
+	struct survey_results *survey_results;
+	u32 surveyed_freq = 0;
+	u32 ifidx;
+
+	static struct nla_policy survey_policy[NL80211_SURVEY_INFO_MAX + 1] = {
+		[NL80211_SURVEY_INFO_FREQUENCY] = { .type = NLA_U32 },
+		[NL80211_SURVEY_INFO_NOISE] = { .type = NLA_U8 },
+	};
+
+	survey_results = (struct survey_results *) arg;
+
+	nla_parse(tb, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0),
+		  genlmsg_attrlen(gnlh, 0), NULL);
+
+	ifidx = nla_get_u32(tb[NL80211_ATTR_IFINDEX]);
+
+	if (!tb[NL80211_ATTR_SURVEY_INFO])
+		return NL_SKIP;
+
+	if (nla_parse_nested(sinfo, NL80211_SURVEY_INFO_MAX,
+			     tb[NL80211_ATTR_SURVEY_INFO],
+			     survey_policy))
+		return NL_SKIP;
+
+	if (!sinfo[NL80211_SURVEY_INFO_FREQUENCY]) {
+		wpa_printf(MSG_ERROR, "nl80211: Invalid survey data");
+		return NL_SKIP;
+	}
+
+	surveyed_freq = nla_get_u32(sinfo[NL80211_SURVEY_INFO_FREQUENCY]);
+
+	if (!check_survey_ok(sinfo, surveyed_freq,
+			     survey_results->freq_filter))
+		return NL_SKIP;
+
+	if (survey_results->freq_filter &&
+	    survey_results->freq_filter != surveyed_freq) {
+		wpa_printf(MSG_EXCESSIVE, "nl80211: Ignoring survey data for freq %d MHz",
+			   surveyed_freq);
+		return NL_SKIP;
+	}
+
+	add_survey(sinfo, ifidx, &survey_results->survey_list);
+
+	return NL_SKIP;
+}
+
+
+static int wpa_driver_nl80211_get_survey(void *priv, unsigned int freq)
+{
+	struct i802_bss *bss = priv;
+	struct wpa_driver_nl80211_data *drv = bss->drv;
+	struct nl_msg *msg;
+	int err = -ENOBUFS;
+	union wpa_event_data data;
+	struct survey_results *survey_results;
+
+	os_memset(&data, 0, sizeof(data));
+	survey_results = &data.survey_results;
+
+	dl_list_init(&survey_results->survey_list);
+
+	msg = nlmsg_alloc();
+	if (!msg)
+		goto nla_put_failure;
+
+	nl80211_cmd(drv, msg, NLM_F_DUMP, NL80211_CMD_GET_SURVEY);
+
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, drv->ifindex);
+
+	if (freq)
+		data.survey_results.freq_filter = freq;
+
+	do {
+		wpa_printf(MSG_DEBUG, "nl80211: Fetch survey data");
+		err = send_and_recv_msgs(drv, msg, survey_handler,
+					 survey_results);
+	} while (err > 0);
+
+	if (err) {
+		wpa_printf(MSG_ERROR, "nl80211: Failed to process survey data");
+		goto out_clean;
+	}
+
+	wpa_supplicant_event(drv->ctx, EVENT_SURVEY, &data);
+
+out_clean:
+	clean_survey_results(survey_results);
+nla_put_failure:
+	return err;
 }
 
 
@@ -10579,4 +10776,5 @@ const struct wpa_driver_ops wpa_driver_nl80211_ops = {
 #endif /* CONFIG_TDLS */
 	.update_ft_ies = wpa_driver_nl80211_update_ft_ies,
 	.get_mac_addr = wpa_driver_nl80211_get_macaddr,
+	.get_survey = wpa_driver_nl80211_get_survey,
 };

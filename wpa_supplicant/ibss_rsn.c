@@ -1,6 +1,6 @@
 /*
  * wpa_supplicant - IBSS RSN
- * Copyright (c) 2009, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2009-2013, Jouni Malinen <j@w1.fi>
  *
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
@@ -9,6 +9,8 @@
 #include "includes.h"
 
 #include "common.h"
+#include "common/wpa_ctrl.h"
+#include "utils/eloop.h"
 #include "l2_packet/l2_packet.h"
 #include "rsn_supp/wpa.h"
 #include "rsn_supp/wpa_ie.h"
@@ -17,6 +19,9 @@
 #include "driver_i.h"
 #include "common/ieee802_11_defs.h"
 #include "ibss_rsn.h"
+
+
+static void ibss_rsn_auth_timeout(void *eloop_ctx, void *timeout_ctx);
 
 
 static struct ibss_rsn_peer * ibss_rsn_get_peer(struct ibss_rsn *ibss_rsn,
@@ -33,6 +38,7 @@ static struct ibss_rsn_peer * ibss_rsn_get_peer(struct ibss_rsn *ibss_rsn,
 
 static void ibss_rsn_free(struct ibss_rsn_peer *peer)
 {
+	eloop_cancel_timeout(ibss_rsn_auth_timeout, peer, NULL);
 	wpa_auth_sta_deinit(peer->auth);
 	wpa_sm_deinit(peer->supp);
 	os_free(peer);
@@ -114,6 +120,22 @@ static int supp_get_beacon_ie(void *ctx)
 }
 
 
+static void ibss_check_rsn_completed(struct ibss_rsn_peer *peer)
+{
+	struct wpa_supplicant *wpa_s = peer->ibss_rsn->wpa_s;
+
+	if ((peer->authentication_status &
+	     (IBSS_RSN_SET_PTK_SUPP | IBSS_RSN_SET_PTK_AUTH)) !=
+	    (IBSS_RSN_SET_PTK_SUPP | IBSS_RSN_SET_PTK_AUTH))
+		return;
+	if (peer->authentication_status & IBSS_RSN_REPORTED_PTK)
+		return;
+	peer->authentication_status |= IBSS_RSN_REPORTED_PTK;
+	wpa_msg(wpa_s, MSG_INFO, IBSS_RSN_COMPLETED MACSTR,
+		MAC2STR(peer->addr));
+}
+
+
 static int supp_set_key(void *ctx, enum wpa_alg alg,
 			const u8 *addr, int key_idx, int set_tx,
 			const u8 *seq, size_t seq_len,
@@ -128,6 +150,8 @@ static int supp_set_key(void *ctx, enum wpa_alg alg,
 	wpa_hexdump_key(MSG_DEBUG, "SUPP: set_key - key", key, key_len);
 
 	if (key_idx == 0) {
+		peer->authentication_status |= IBSS_RSN_SET_PTK_SUPP;
+		ibss_check_rsn_completed(peer);
 		/*
 		 * In IBSS RSN, the pairwise key from the 4-way handshake
 		 * initiated by the peer with highest MAC address is used.
@@ -281,6 +305,15 @@ static int auth_set_key(void *ctx, int vlan_id, enum wpa_alg alg,
 	wpa_hexdump_key(MSG_DEBUG, "AUTH: set_key - key", key, key_len);
 
 	if (idx == 0) {
+		if (addr) {
+			struct ibss_rsn_peer *peer;
+			peer = ibss_rsn_get_peer(ibss_rsn, addr);
+			if (peer) {
+				peer->authentication_status |=
+					IBSS_RSN_SET_PTK_AUTH;
+				ibss_check_rsn_completed(peer);
+			}
+		}
 		/*
 		 * In IBSS RSN, the pairwise key from the 4-way handshake
 		 * initiated by the peer with highest MAC address is used.
@@ -515,6 +548,23 @@ ibss_rsn_peer_init(struct ibss_rsn *ibss_rsn, const u8 *addr)
 }
 
 
+static void ibss_rsn_auth_timeout(void *eloop_ctx, void *timeout_ctx)
+{
+	struct ibss_rsn_peer *peer = eloop_ctx;
+
+	/*
+	 * Assume peer does not support Authentication exchange or the frame was
+	 * lost somewhere - start EAPOL Authenticator.
+	 */
+	wpa_printf(MSG_DEBUG,
+		   "RSN: Timeout on waiting Authentication frame response from "
+		   MACSTR " - start authenticator", MAC2STR(peer->addr));
+
+	peer->authentication_status |= IBSS_RSN_AUTH_BY_US;
+	ibss_rsn_auth_init(peer->ibss_rsn, peer);
+}
+
+
 int ibss_rsn_start(struct ibss_rsn *ibss_rsn, const u8 *addr)
 {
 	struct ibss_rsn_peer *peer;
@@ -538,6 +588,9 @@ int ibss_rsn_start(struct ibss_rsn *ibss_rsn, const u8 *addr)
 		 */
 		peer->authentication_status |= IBSS_RSN_AUTH_BY_US;
 		return ibss_rsn_auth_init(ibss_rsn, peer);
+	} else {
+		os_get_time(&peer->own_auth_tx);
+		eloop_register_timeout(1, 0, ibss_rsn_auth_timeout, peer, NULL);
 	}
 
 	return 0;
@@ -779,6 +832,16 @@ static void ibss_rsn_handle_auth_1_of_2(struct ibss_rsn *ibss_rsn,
 
 	if (peer &&
 	    peer->authentication_status & IBSS_RSN_AUTH_EAPOL_BY_PEER) {
+		if (peer->own_auth_tx.sec) {
+			struct os_time now, diff;
+			os_get_time(&now);
+			os_time_sub(&now, &peer->own_auth_tx, &diff);
+			if (diff.sec == 0 && diff.usec < 500000) {
+				wpa_printf(MSG_DEBUG, "RSN: Skip IBSS reinit since only %u usec from own Auth frame TX",
+					   (int) diff.usec);
+				goto skip_reinit;
+			}
+		}
 		/*
 		 * A peer sent us an Authentication frame even though it already
 		 * started an EAPOL session. We should reinit state machines
@@ -801,6 +864,7 @@ static void ibss_rsn_handle_auth_1_of_2(struct ibss_rsn *ibss_rsn,
 			   MAC2STR(addr));
 	}
 
+skip_reinit:
 	/* reply with an Authentication frame now, before sending an EAPOL */
 	ibss_rsn_send_auth(ibss_rsn, addr, 2);
 	/* no need to start another AUTH challenge in the other way.. */
@@ -841,7 +905,8 @@ void ibss_rsn_handle_auth(struct ibss_rsn *ibss_rsn, const u8 *auth_frame,
 		}
 
 		/* authentication has been completed */
-		wpa_printf(MSG_DEBUG, "RSN: IBSS Auth completed with "MACSTR,
+		eloop_cancel_timeout(ibss_rsn_auth_timeout, peer, NULL);
+		wpa_printf(MSG_DEBUG, "RSN: IBSS Auth completed with " MACSTR,
 			   MAC2STR(header->sa));
 		ibss_rsn_peer_authenticated(ibss_rsn, peer,
 					    IBSS_RSN_AUTH_BY_US);
