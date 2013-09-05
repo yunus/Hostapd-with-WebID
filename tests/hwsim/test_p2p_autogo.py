@@ -32,10 +32,7 @@ def test_autogo(dev):
     autogo(dev[0])
     connect_cli(dev[0], dev[1])
     dev[0].remove_group()
-    try:
-        dev[1].remove_group()
-    except:
-        pass
+    dev[1].wait_go_ending_session()
 
 def test_autogo_2cli(dev):
     """P2P autonomous GO and two clients joining group"""
@@ -43,9 +40,10 @@ def test_autogo_2cli(dev):
     connect_cli(dev[0], dev[1])
     connect_cli(dev[0], dev[2])
     hwsim_utils.test_connectivity_p2p(dev[1], dev[2])
-    dev[2].remove_group()
-    dev[1].remove_group()
+    dev[0].global_request("P2P_REMOVE_CLIENT " + dev[1].p2p_dev_addr())
+    dev[1].wait_go_ending_session()
     dev[0].remove_group()
+    dev[2].wait_go_ending_session()
 
 def test_autogo_tdls(dev):
     """P2P autonomous GO and two clients using TDLS"""
