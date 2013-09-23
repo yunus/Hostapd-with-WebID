@@ -16,9 +16,9 @@
 	#include <Python.h>
 	static const char *serv_webid;
 	static char *webid_method;
+	static char mac_list[10][18] = {"\0","\0","\0","\0","\0","\0","\0","\0","\0","\0"};
+	static int mac_list_position = 0;
 #endif
-
-
 
 
 static int
@@ -56,14 +56,60 @@ matches_pkey(unsigned char *s, char *pkey) {
 }
 
 #ifdef EAP_SERVER_STLS_AUTHORIZATION
+
+static char* get_station_list(char station_list[]){
+	int i = 9;
+
+	for(;i >= 0;i--){
+		sprintf(station_list,"%s|%s",station_list, mac_list[(mac_list_position + i ) % 10]);
+	}
+
+	wpa_printf(MSG_DEBUG,"STLS: Current MAC LIST: --%s--",station_list);
+	return station_list;
+}
+
+
+void webid_add_new_station( const u8 *addr){
+	char mac[18];
+	if(addr){
+
+		os_snprintf(mac, sizeof(mac),MACSTR,MAC2STR(addr));
+		os_strncpy(mac_list[mac_list_position],mac,18);
+		mac_list_position = (mac_list_position + 1) % 10;
+
+		wpa_printf(MSG_DEBUG,"STLS: Adding station %s",mac);
+	}
+
+}
+
+void webid_remove_station( const u8 *addr){
+	int i = 0;
+	char mac[18];
+	if(addr){
+
+		os_snprintf(mac, sizeof(mac), MACSTR,MAC2STR(addr) );
+		for(;i<10;i++){
+			if(os_strcmp(mac_list[i],mac) == 0){
+				os_strncpy(mac_list[i],"\0",1);
+				break;
+			}
+		}
+		wpa_printf(MSG_DEBUG,"STLS: Removing station %s",mac);
+	}
+}
+
 int
 trust( const char* san_uri)
 {
     PyObject  *pModule;
     PyObject *pValue;
     int  is_trusted = 0;
+	char station_list[18*10] = "";
 
+	
     Py_Initialize();
+    
+    get_station_list(station_list);
     pModule = PyImport_ImportModule(WEBID_MODULE);
 
     if (pModule != NULL) {
@@ -94,13 +140,20 @@ trust( const char* san_uri)
     return is_trusted;
 }
 
-void set_server_webid(const char* webid, const char* webid_m){
+void init_webid(const char* webid, const char* webid_m){
+
 	serv_webid = webid;
+	
+	
 	if(os_strcmp(webid_m,"direct") == 0)
 		webid_method = WEBID_DIRECT_METHOD;
-	else
+	else if(os_strcmp(webid_m,"transitive") == 0)
 		webid_method = WEBID_TRANSITIVE_METHOD;
-	
+	else
+		webid_method = WEBID_ALL_METHOD;
+		
+
+
 }
 
 #endif /*EAP_SERVER_STLS_AUTHORIZATION*/

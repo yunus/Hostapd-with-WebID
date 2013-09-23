@@ -148,7 +148,7 @@ int authsrv_init(struct hostapd_data *hapd)
 		}
 		
 #ifdef EAP_SERVER_STLS_AUTHORIZATION
-		set_server_webid(hapd->conf->server_webid, hapd->conf->webid_method);
+		init_webid(hapd->conf->server_webid, hapd->conf->webid_method);
 #endif
 
 		os_memset(&params, 0, sizeof(params));

@@ -1,3 +1,15 @@
+/*
+ * EAP-SocTLS authentication protocol python bridge and common variables/functions
+ * Yunus Durmus (yunus@yanis.co)
+ *
+ */
+
+
+#ifndef _WEBID_H_
+#define _WEBID_H_
+
+
+#include "utils/common.h"
 
 #define SPARQL_WEBID \
 	"PREFIX cert: <http://www.w3.org/ns/auth/cert#> "\
@@ -14,6 +26,7 @@
 #define WEBID_MODULE "webid.authorizer"
 #define WEBID_DIRECT_METHOD "__direct_trust"
 #define WEBID_TRANSITIVE_METHOD "__transitive_trust"
+#define WEBID_ALL_METHOD "__trust"
 
 #ifdef EAP_SERVER_STLS_AUTHORIZATION
 /*
@@ -30,16 +43,29 @@
 int trust( const char* san_uri);
 
 /*
- * set_server_webid - sets the server device's webid url
+ * init_webid - sets the server device's webid url
  * @webid: the server's webid
- * @webid_m: defines whether direct trust ot transitive trust will be used, if ="direct",
- * 	direct method is used otherwise transitive
+ * @webid_m: defines whether direct trust or transitive trust will be used, options are:
+ * direct,transitive,all
  * 
  * the server_webid entered in the config file is set as a global variable
  * the webid_auth_method entered in the config file is set as a global variable
+ * the data structure for mac addresses is initialized.
  * 
  * */
-void set_server_webid(const char* webid, const char* webid_m);
+void init_webid(const char* webid, const char* webid_m);
+
+
+/*
+ *
+ * We need to supply mac address information to the webid validator in order to
+ * use context information. However, tls_openssl does not have any information about
+ * the mac address, it only checks the certificate. Therefore, we create some global variables
+ * and to store mac addresses that are being authenticated.
+ * We tried to map certificates to mac addresses but certificate information is only available in openssl level.
+ * */
+void webid_add_new_station(const u8 *addr);
+void webid_remove_station(const u8 *addr);
 
 #endif /*EAP_SERVER_STLS_AUTHORIZATION*/
 
@@ -56,3 +82,7 @@ void set_server_webid(const char* webid, const char* webid_m);
  * If authorization is not required the trust method above can be skipped.
  * */
 int validate_webid(const char *subjAltName, char *pkey_n, unsigned int pkey_e_i); 
+
+
+
+#endif // #ifndef _WEBID_H_

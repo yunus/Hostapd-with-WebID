@@ -19,6 +19,10 @@
 #include "state_machine.h"
 #include "common/wpa_ctrl.h"
 
+#ifdef EAP_SERVER_STLS_AUTHORIZATION
+#include "crypto/webid.h"
+#endif
+
 #define STATE_MACHINE_DATA struct eap_sm
 #define STATE_MACHINE_DEBUG_PREFIX "EAP"
 
@@ -434,6 +438,10 @@ SM_STATE(EAP, FAILURE)
 	sm->lastReqData = NULL;
 	sm->eap_if.eapFail = TRUE;
 
+	#ifdef EAP_SERVER_STLS_AUTHORIZATION
+		webid_remove_station(sm->peer_addr);
+	#endif
+
 	wpa_msg(sm->msg_ctx, MSG_INFO, WPA_EVENT_EAP_FAILURE
 		MACSTR, MAC2STR(sm->peer_addr));
 }
@@ -451,8 +459,13 @@ SM_STATE(EAP, SUCCESS)
 		sm->eap_if.eapKeyAvailable = TRUE;
 	sm->eap_if.eapSuccess = TRUE;
 
+	#ifdef EAP_SERVER_STLS_AUTHORIZATION
+		webid_remove_station(sm->peer_addr);
+	#endif
+
 	wpa_msg(sm->msg_ctx, MSG_INFO, WPA_EVENT_EAP_SUCCESS
 		MACSTR, MAC2STR(sm->peer_addr));
+
 }
 
 

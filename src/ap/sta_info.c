@@ -33,6 +33,10 @@
 #include "gas_serv.h"
 #include "sta_info.h"
 
+#ifdef EAP_SERVER_STLS_AUTHORIZATION
+#include "crypto/webid.h"
+#endif
+
 static void ap_sta_remove_in_other_bss(struct hostapd_data *hapd,
 				       struct sta_info *sta);
 static void ap_handle_session_timer(void *eloop_ctx, void *timeout_ctx);
@@ -546,6 +550,10 @@ struct sta_info * ap_sta_add(struct hostapd_data *hapd, const u8 *addr)
 	sta->ssid = &hapd->conf->ssid;
 	ap_sta_remove_in_other_bss(hapd, sta);
 
+	#ifdef EAP_SERVER_STLS_AUTHORIZATION
+		webid_add_new_station(addr);
+	#endif
+
 	return sta;
 }
 
@@ -553,6 +561,10 @@ struct sta_info * ap_sta_add(struct hostapd_data *hapd, const u8 *addr)
 static int ap_sta_remove(struct hostapd_data *hapd, struct sta_info *sta)
 {
 	ieee802_1x_notify_port_enabled(sta->eapol_sm, 0);
+
+	#ifdef EAP_SERVER_STLS_AUTHORIZATION
+		webid_remove_station(sta->addr);
+	#endif
 
 	wpa_printf(MSG_DEBUG, "Removing STA " MACSTR " from kernel driver",
 		   MAC2STR(sta->addr));
@@ -931,6 +943,10 @@ void ap_sta_set_authorized(struct hostapd_data *hapd, struct sta_info *sta,
 
 		sta->flags &= ~WLAN_STA_AUTHORIZED;
 	}
+	#ifdef EAP_SERVER_STLS_AUTHORIZATION
+	/*Either station has been authorized or de-authorized, we are done with it. */
+		webid_remove_station(sta->addr);
+	#endif
 
 	if (hapd->sta_authorized_cb)
 		hapd->sta_authorized_cb(hapd->sta_authorized_cb_ctx,
