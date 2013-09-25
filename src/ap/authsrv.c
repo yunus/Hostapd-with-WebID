@@ -219,4 +219,7 @@ void authsrv_deinit(struct hostapd_data *hapd)
 		hapd->eap_sim_db_priv = NULL;
 	}
 #endif /* EAP_SIM_DB */
+#ifdef EAP_SERVER_STLS_AUTHORIZATION
+		deinit_webid();
+#endif
 }

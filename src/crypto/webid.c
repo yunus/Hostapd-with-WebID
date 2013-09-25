@@ -11,6 +11,7 @@
 #include "redland.h"
 #include "webid.h"
 #include "common.h"
+#include <time.h>
 
 #ifdef EAP_SERVER_STLS_AUTHORIZATION
 	#include <Python.h>
@@ -18,6 +19,8 @@
 	static char *webid_method;
 	static char mac_list[10][18] = {"\0","\0","\0","\0","\0","\0","\0","\0","\0","\0"};
 	static int mac_list_position = 0;
+	static PyObject  *pAuthModule;
+	static PyObject  *pSniffModule;
 #endif
 
 
@@ -57,7 +60,7 @@ matches_pkey(unsigned char *s, char *pkey) {
 
 #ifdef EAP_SERVER_STLS_AUTHORIZATION
 
-static char* get_station_list(char station_list[]){
+static void get_station_list(char station_list[]){
 	int i = 9;
 
 	for(;i >= 0;i--){
@@ -65,7 +68,24 @@ static char* get_station_list(char station_list[]){
 	}
 
 	wpa_printf(MSG_DEBUG,"STLS: Current MAC LIST: --%s--",station_list);
-	return station_list;
+
+}
+
+void add_mac( const u8 *addr){
+	char mac[18];
+	time_t seconds;
+	seconds = time(NULL);
+
+	if(addr && pSniffModule != NULL){
+		os_snprintf(mac, sizeof(mac),MACSTR,MAC2STR(addr));
+		PyObject_CallMethod(pSniffModule,WEBID_SNIFF_METHOD,"sl", mac,seconds);
+		wpa_printf(MSG_DEBUG,"STLS: Push probe request from %s",mac);
+	}
+	else {
+		PyErr_Print();
+		wpa_printf(MSG_ERROR,"STLS: %s module is null",
+				WEBID_AUTHORIZER_MODULE);
+	}
 }
 
 
@@ -101,43 +121,43 @@ void webid_remove_station( const u8 *addr){
 int
 trust( const char* san_uri)
 {
-    PyObject  *pModule;
-    PyObject *pValue;
-    int  is_trusted = 0;
+
+	PyObject *pValue;
+	int  is_trusted = 0;
 	char station_list[18*10] = "";
 
-	
-    Py_Initialize();
-    
-    get_station_list(station_list);
-    pModule = PyImport_ImportModule(WEBID_MODULE);
 
-    if (pModule != NULL) {
+	if(!Py_IsInitialized())
+		Py_Initialize();
 
-        	pValue = PyObject_CallMethod(pModule,webid_method,"ss", serv_webid, san_uri);
-        	/* pValue is a new reference*/
+	if (pAuthModule != NULL) {
+		get_station_list(station_list);
+		time_t seconds;
+		seconds = time(NULL);
+		pValue = PyObject_CallMethod(pAuthModule,webid_method,"sssl",
+				serv_webid, san_uri,station_list,seconds);
+		/* pValue is a new reference*/
 
-            if (pValue != NULL &&  PyBool_Check(pValue)) {
-            	is_trusted = PyObject_IsTrue(pValue);
-            	wpa_printf(MSG_DEBUG,"STLS: Result from %s is %d",webid_method,is_trusted);            
-                Py_DECREF(pValue);
-            }
-            else {                
-                Py_DECREF(pModule);
-                PyErr_Print();
-                wpa_printf(MSG_ERROR,"STLS: A problem occured in trust method call");                
-                return 0;
-            }
-        Py_DECREF(pModule);
-    }
-    else {
-        PyErr_Print();
-        wpa_printf(MSG_ERROR,"STLS: Failed to load %s, check installation of external library.",
-        		WEBID_MODULE);         
-        return 0;
-    }
-    Py_Finalize();
-    return is_trusted;
+		if (pValue != NULL &&  PyBool_Check(pValue)) {
+			is_trusted = PyObject_IsTrue(pValue);
+			wpa_printf(MSG_DEBUG,"STLS: Result from %s is %d",webid_method,is_trusted);
+			Py_DECREF(pValue);
+		}
+		else {
+			Py_DECREF(pAuthModule);
+			PyErr_Print();
+			wpa_printf(MSG_ERROR,"STLS: A problem occurred in trust method call");
+			return 0;
+		}
+	}
+	else {
+		PyErr_Print();
+		wpa_printf(MSG_ERROR,"STLS: %s module is null",
+				WEBID_AUTHORIZER_MODULE);
+		return 0;
+	}
+
+	return is_trusted;
 }
 
 void init_webid(const char* webid, const char* webid_m){
@@ -152,8 +172,26 @@ void init_webid(const char* webid, const char* webid_m){
 	else
 		webid_method = WEBID_ALL_METHOD;
 		
+	if(!Py_IsInitialized())
+		 Py_Initialize();
 
+	pAuthModule = PyImport_ImportModule(WEBID_AUTHORIZER_MODULE);
+	pSniffModule = PyImport_ImportModule(WEBID_SNIFFER_MODULE);
+	if(pAuthModule == NULL || pSniffModule == NULL){
+		PyErr_Print();
+		wpa_printf(MSG_ERROR,"STLS: Failed to load %s or %s, check installation of external library.",
+		        		WEBID_AUTHORIZER_MODULE,WEBID_SNIFFER_MODULE);
+	}
 
+}
+
+void deinit_webid() {
+	if(Py_IsInitialized()){
+		Py_XDECREF(pAuthModule);
+		Py_XDECREF(pSniffModule);
+		Py_Finalize();
+	}
+	wpa_printf(MSG_DEBUG,"STLS: Python interpreter has been finalized");
 }
 
 #endif /*EAP_SERVER_STLS_AUTHORIZATION*/

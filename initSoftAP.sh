@@ -23,6 +23,9 @@ iptables --append FORWARD --in-interface $1 -j ACCEPT
 #iptables -I FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
  
 sysctl -w net.ipv4.ip_forward=1
+
+nmcli nm wifi off
+rfkill unblock wlan
  
 #start hostapd
 ./hostapd/hostapd -d ./hostapd/myhostapd.conf 1> hostapd.log

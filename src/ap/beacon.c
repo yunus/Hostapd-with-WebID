@@ -35,6 +35,10 @@
 #include "beacon.h"
 #include "hs20.h"
 
+#ifdef EAP_SERVER_STLS_AUTHORIZATION
+#include "crypto/webid.h"
+#endif
+
 
 #ifdef NEED_AP_MLME
 
@@ -376,6 +380,10 @@ void handle_probe_req(struct hostapd_data *hapd,
 
 	if (!hapd->iconf->send_probe_response)
 		return;
+
+#ifdef EAP_SERVER_STLS_AUTHORIZATION
+	add_mac(mgmt->sa);
+#endif
 
 	if (ieee802_11_parse_elems(ie, ie_len, &elems, 0) == ParseFailed) {
 		wpa_printf(MSG_DEBUG, "Could not parse ProbeReq from " MACSTR,

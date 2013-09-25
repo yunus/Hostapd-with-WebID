@@ -23,10 +23,12 @@
 	
 
 
-#define WEBID_MODULE "webid.authorizer"
+#define WEBID_AUTHORIZER_MODULE "webid.authorizer"
+#define WEBID_SNIFFER_MODULE "webid.sniffer"
 #define WEBID_DIRECT_METHOD "__direct_trust"
 #define WEBID_TRANSITIVE_METHOD "__transitive_trust"
 #define WEBID_ALL_METHOD "__trust"
+#define WEBID_SNIFF_METHOD "add_mac_address"
 
 #ifdef EAP_SERVER_STLS_AUTHORIZATION
 /*
@@ -51,6 +53,7 @@ int trust( const char* san_uri);
  * the server_webid entered in the config file is set as a global variable
  * the webid_auth_method entered in the config file is set as a global variable
  * the data structure for mac addresses is initialized.
+ * Python interpreter is started.
  * 
  * */
 void init_webid(const char* webid, const char* webid_m);
@@ -66,6 +69,19 @@ void init_webid(const char* webid, const char* webid_m);
  * */
 void webid_add_new_station(const u8 *addr);
 void webid_remove_station(const u8 *addr);
+
+/*
+ * add_mac - calls python module to persist the sniffed mac address
+ * @addr - mac address array
+ * sniffed probe requests are persisted to the database.
+ * Later on sniffed mac addresses will be used to infer context.
+ * */
+void add_mac(const u8 *addr);
+
+/*
+ * We need to finalize embedded python
+ * */
+void deinit_webid();
 
 #endif /*EAP_SERVER_STLS_AUTHORIZATION*/
 
