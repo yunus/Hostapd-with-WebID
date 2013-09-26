@@ -31,9 +31,6 @@
 #include "ap_drv_ops.h"
 #include "ieee802_1x.h"
 
-#ifdef EAP_SERVER_STLS_AUTHORIZATION
-	#include "crypto/webid.h"
-#endif
 
 static void ieee802_1x_finished(struct hostapd_data *hapd,
 				struct sta_info *sta, int success);
@@ -605,15 +602,9 @@ static void handle_eap(struct hostapd_data *hapd, struct sta_info *sta,
 		break;
 	case EAP_CODE_SUCCESS:
 		wpa_printf(MSG_DEBUG, " (success)");
-		#ifdef EAP_SERVER_STLS_AUTHORIZATION
-			webid_remove_station(sta->addr);
-		#endif
 		return;
 	case EAP_CODE_FAILURE:
 		wpa_printf(MSG_DEBUG, " (failure)");
-		#ifdef EAP_SERVER_STLS_AUTHORIZATION
-			webid_remove_station(sta->addr);
-		#endif
 		return;
 	default:
 		wpa_printf(MSG_DEBUG, " (unknown code)");

@@ -337,6 +337,7 @@ SM_STATE(EAP, METHOD_RESPONSE)
 	} else {
 		sm->methodState = METHOD_CONTINUE;
 	}
+
 }
 
 
@@ -438,9 +439,6 @@ SM_STATE(EAP, FAILURE)
 	sm->lastReqData = NULL;
 	sm->eap_if.eapFail = TRUE;
 
-	#ifdef EAP_SERVER_STLS_AUTHORIZATION
-		webid_remove_station(sm->peer_addr);
-	#endif
 
 	wpa_msg(sm->msg_ctx, MSG_INFO, WPA_EVENT_EAP_FAILURE
 		MACSTR, MAC2STR(sm->peer_addr));

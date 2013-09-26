@@ -1,4 +1,8 @@
 #!/bin/bash
+
+nmcli nm wifi off
+rfkill unblock wlan
+
 #Initial wifi interface configuration
 ifconfig $1 up 10.0.0.1 netmask 255.255.255.0
 sleep 2
@@ -24,8 +28,6 @@ iptables --append FORWARD --in-interface $1 -j ACCEPT
  
 sysctl -w net.ipv4.ip_forward=1
 
-nmcli nm wifi off
-rfkill unblock wlan
  
 #start hostapd
 ./hostapd/hostapd -d ./hostapd/myhostapd.conf 1> hostapd.log

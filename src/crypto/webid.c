@@ -79,7 +79,7 @@ void add_mac( const u8 *addr){
 	if(addr && pSniffModule != NULL){
 		os_snprintf(mac, sizeof(mac),MACSTR,MAC2STR(addr));
 		PyObject_CallMethod(pSniffModule,WEBID_SNIFF_METHOD,"sl", mac,seconds);
-		wpa_printf(MSG_DEBUG,"STLS: Push probe request from %s",mac);
+		/*wpa_printf(MSG_DEBUG,"STLS: Push probe request from %s",mac);*/
 	}
 	else {
 		PyErr_Print();
