@@ -132,10 +132,8 @@ trust( const char* san_uri)
 
 	if (pAuthModule != NULL) {
 		get_station_list(station_list);
-		time_t seconds;
-		seconds = time(NULL);
-		pValue = PyObject_CallMethod(pAuthModule,webid_method,"sssl",
-				serv_webid, san_uri,station_list,seconds);
+		pValue = PyObject_CallMethod(pAuthModule,webid_method,"sss",
+				serv_webid, san_uri,station_list);
 		/* pValue is a new reference*/
 
 		if (pValue != NULL &&  PyBool_Check(pValue)) {
